@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1D6A33">
+<title>Yjeek Field CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+:root{--green:#1D6A33;--green-d:#154D25;--gold:#CAA34D;--ink:#1A1A1A;--mute:#6B7280;--line:#E5E7EB;--bg:#F4F6F4;--card:#FFFFFF;--light:#EEF5F0;--callout:#FFF8E1;--red:#B42318;--red-bg:#FEE4E2;--amber:#B54708;--amber-bg:#FEF0C7;--ok:#067647;--ok-bg:#DCFAE6;--r:12px}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,system-ui,sans-serif;font-size:15px;-webkit-tap-highlight-color:transparent}
+button,input,select,textarea{font:inherit}
+a{color:var(--green)}
+#app{min-height:100vh;display:flex;flex-direction:column}
+header.top{position:sticky;top:0;z-index:20;background:var(--green);color:#fff;padding:12px 16px;display:flex;align-items:center;gap:10px;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+header.top .logo{width:30px;height:30px;border-radius:8px;background:var(--gold);display:grid;place-items:center;color:var(--green-d);font-weight:700}
+header.top h1{font-size:16px;margin:0;flex:1;font-weight:600}
+header.top button{background:rgba(255,255,255,.15);border:0;color:#fff;border-radius:8px;padding:6px 10px}
+nav.tabs{position:sticky;bottom:0;z-index:20;background:#fff;border-top:1px solid var(--line);display:flex;padding-bottom:env(safe-area-inset-bottom)}
+nav.tabs button{flex:1;border:0;background:none;padding:10px 4px 8px;color:var(--mute);font-size:12px;display:flex;flex-direction:column;align-items:center;gap:3px}
+nav.tabs button.on{color:var(--green);font-weight:600}
+nav.tabs svg{width:22px;height:22px}
+main{flex:1;padding:14px 16px 24px;max-width:1100px;width:100%;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:12px}
+.card h2{font-size:15px;margin:0 0 10px;font-weight:600}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.grow{flex:1}
+.btn{border:1px solid var(--green);background:var(--green);color:#fff;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer;min-height:42px}
+.btn.sec{background:#fff;color:var(--green)}
+.btn.gold{background:var(--gold);border-color:var(--gold);color:#1A1A1A}
+.btn.danger{background:#fff;border-color:var(--red);color:var(--red)}
+.btn.sm{padding:6px 10px;min-height:34px;font-size:13px;border-radius:8px}
+.btn:disabled{opacity:.5}
+input[type=text],input[type=search],input[type=tel],input[type=email],input[type=number],input[type=date],input[type=password],input[type=time],select,textarea{width:100%;border:1px solid #D1D5DB;border-radius:10px;padding:10px 12px;background:#fff;min-height:42px}
+textarea{min-height:70px;resize:vertical}
+label.f{display:block;font-size:12px;color:var(--mute);margin:8px 0 4px;font-weight:500}
+label.f.req::after{content:" *";color:var(--red)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+@media(min-width:720px){.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.grid2d{display:grid;grid-template-columns:1fr 1fr;gap:12px}}
+.pill{display:inline-block;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:600;background:var(--light);color:var(--green-d);white-space:nowrap}
+.pill.red{background:var(--red-bg);color:var(--red)}.pill.amber{background:var(--amber-bg);color:var(--amber)}.pill.ok{background:var(--ok-bg);color:var(--ok)}.pill.grey{background:#EEE;color:#555}.pill.gold{background:#F6EBCF;color:#7A5A0E}
+.list .item{display:block;padding:12px 2px;border-bottom:1px solid var(--line);text-decoration:none;color:inherit;cursor:pointer}
+.list .item:last-child{border-bottom:0}
+.item .t{font-weight:600;display:flex;justify-content:space-between;gap:8px;align-items:center}
+.item .s{font-size:13px;color:var(--mute);margin-top:3px;display:flex;gap:10px;flex-wrap:wrap}
+.mute{color:var(--mute);font-size:13px}
+.tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media(min-width:720px){.tiles{grid-template-columns:repeat(5,1fr)}}
+.tile{background:#fff;border:1px solid var(--line);border-radius:var(--r);padding:12px}
+.tile .n{font-size:26px;font-weight:700;color:var(--green);line-height:1.1}
+.tile .l{font-size:12px;color:var(--mute);margin-top:4px}
+.tile.warn .n{color:var(--red)}
+.seg{display:flex;background:var(--light);border-radius:10px;padding:3px;gap:3px;overflow:auto}
+.seg button{flex:1;border:0;background:none;padding:8px 10px;border-radius:8px;color:var(--green-d);font-weight:500;white-space:nowrap}
+.seg button.on{background:#fff;font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:40;display:flex;align-items:flex-end;justify-content:center}
+@media(min-width:720px){.modal{align-items:center}}
+.modal .box{background:#fff;width:100%;max-width:640px;max-height:92vh;overflow:auto;border-radius:16px 16px 0 0;padding:16px 16px 24px}
+@media(min-width:720px){.modal .box{border-radius:16px}}
+.modal h3{margin:0 0 10px;font-size:17px}
+.toast{position:fixed;left:50%;bottom:76px;transform:translateX(-50%);background:#1A1A1A;color:#fff;padding:10px 16px;border-radius:10px;z-index:60;font-size:14px;max-width:90vw}
+.toast.err{background:var(--red)}
+.back{background:none;border:0;color:#fff;font-size:22px;padding:0 6px 0 0;cursor:pointer}
+.kv{display:grid;grid-template-columns:120px 1fr;gap:4px 10px;font-size:14px}
+.kv div:nth-child(odd){color:var(--mute)}
+.hist{border-left:3px solid var(--light);padding-left:10px;margin:8px 0}
+.hist .d{font-size:12px;color:var(--mute)}
+table.tb{width:100%;border-collapse:collapse;font-size:13px}
+table.tb th,table.tb td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
+table.tb th{color:var(--mute);font-weight:500;font-size:12px}
+.chart{position:relative;height:260px}
+#map{height:52vh;min-height:320px;border-radius:var(--r);border:1px solid var(--line)}
+.branch{border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:8px;display:flex;gap:10px;align-items:flex-start}
+.branch.closed{opacity:.55}
+.branch input[type=checkbox]{width:22px;height:22px;margin-top:2px;accent-color:var(--green)}
+.days{display:flex;gap:4px}.days label{flex:1;text-align:center;font-size:11px;border:1px solid var(--line);border-radius:6px;padding:4px 0;cursor:pointer}.days label.on{background:var(--green);color:#fff;border-color:var(--green)}
+.days input{display:none}
+.spin{display:inline-block;width:16px;height:16px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:sp .8s linear infinite;vertical-align:middle}
+@keyframes sp{to{transform:rotate(360deg)}}
+.hide{display:none!important}
+.login{max-width:380px;margin:12vh auto;padding:0 16px}
+.login .logo{width:64px;height:64px;border-radius:18px;background:var(--green);color:var(--gold);display:grid;place-items:center;font-weight:700;font-size:28px;margin:0 auto 14px}
+.def{font-size:12px;color:var(--mute);margin-top:2px}
+.rate{background:var(--callout)}
+.wa{color:#1B8F4B;font-weight:600;text-decoration:none}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+// ====================================================================== CONFIG
+const API_URL = 'PASTE_YOUR_WEB_APP_EXEC_URL_HERE';   // Apps Script → Deploy → Web app → URL ending in /exec
+// ======================================================================
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const S = { token: null, user: null, meta: null, view: 'home', vendor: null, list: { scope: 'mine', q: '', status: '', page: 1, total: 0, items: [], rep: '' }, dash: null, charts: {}, period: 'week', from: '', to: '', drep: '' };
+try { const saved = JSON.parse(localStorage.getItem('yjeek_crm') || 'null'); if (saved && saved.token) { S.token = saved.token; S.user = saved.user; S.meta = saved.meta; } } catch (e) {}
+
+async function api(action, params) {
+  const body = Object.assign({ action: action, token: S.token }, params || {});
+  let res; try { res = await fetch(API_URL, { method: 'POST', body: JSON.stringify(body), redirect: 'follow' }); } catch (e) { throw new Error('No connection to the API'); }
+  const data = await res.json();
+  if (data.auth === false) { logout(); throw new Error('Session expired — sign in again'); }
+  if (!data.ok) throw new Error(data.error || 'Request failed');
+  return data;
+}
+function toast(msg, err) { const t = document.createElement('div'); t.className = 'toast' + (err ? ' err' : ''); t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), err ? 5000 : 2600); }
+function busy(btn, on) { if (!btn) return; if (on) { btn.dataset.t = btn.innerHTML; btn.innerHTML = '<span class="spin"></span>'; btn.disabled = true; } else { btn.innerHTML = btn.dataset.t || btn.innerHTML; btn.disabled = false; } }
+function logout() { S.token = null; S.user = null; try { localStorage.removeItem('yjeek_crm'); } catch (e) {} render(); }
+const fmt = d => d ? d.split('-').reverse().join('/') : '—';
+const todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+const plusDays = n => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+function statusPill(st) { const c = /Signed|Onboarded/.test(st) ? 'ok' : /Contract sent/.test(st) ? 'gold' : /Not interested|Closed|Wrong|Duplicate/.test(st) ? 'grey' : /Interested|Meeting|Visited/.test(st) ? '' : 'grey'; return '<span class="pill ' + c + '">' + esc(st || 'New') + '</span>'; }
+function geoPill(g) { if (!g) return '<span class="pill grey">no pin</span>'; const c = /Verified|High|Manual/.test(g) ? 'ok' : /Medium/.test(g) ? 'amber' : 'red'; return '<span class="pill ' + c + '">' + esc(g) + '</span>'; }
+function tel(n) { const d = String(n || '').replace(/[^\d]/g, ''); if (!d) return ''; return d.length === 8 ? '973' + d : d; }
+
+// ====================================================================== shell
+function render() {
+  const app = $('#app');
+  if (!S.token) { app.innerHTML = loginView(); return; }
+  const mgr = S.user.role === 'manager';
+  app.innerHTML = `
+  <header class="top">${S.view === 'vendor' ? '<button class="back" onclick="go(S.prevView||\'vendors\')">‹</button>' : '<div class="logo">Y</div>'}
+    <h1>${S.view === 'vendor' && S.vendor ? esc(S.vendor.brand) : { home: 'Today', vendors: 'Vendors', dash: 'Dashboard', pins: 'Pin check', team: 'Team' }[S.view] || 'Yjeek CRM'}</h1>
+    <span class="mute" style="color:#fff;opacity:.85;font-size:13px">${esc(S.user.name)}</span><button onclick="logout()">Sign out</button></header>
+  <main id="main"></main>
+  <nav class="tabs">
+    ${tab('home', 'Today', 'M3 12l9-9 9 9M5 10v10h14V10')}
+    ${tab('vendors', 'Vendors', 'M4 6h16M4 12h16M4 18h10')}
+    ${mgr ? tab('dash', 'Dashboard', 'M4 20V10M10 20V4M16 20v-7M22 20H2') : ''}
+    ${mgr ? tab('pins', 'Pins', 'M12 21s-7-6-7-11a7 7 0 0114 0c0 5-7 11-7 11zM12 10a2 2 0 100-4 2 2 0 000 4z') : ''}
+  </nav>`;
+  ({ home: homeView, vendors: vendorsView, vendor: vendorView, dash: dashView, pins: pinsView })[S.view]();
+}
+const tab = (v, l, p) => `<button class="${S.view === v ? 'on' : ''}" onclick="go('${v}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${p}"/></svg>${l}</button>`;
+function go(v) { if (S.view !== 'vendor') S.prevView = S.view; S.view = v; render(); }
+
+// ====================================================================== login
+function loginView() {
+  return `<div class="login"><div class="logo">Y</div><h2 style="text-align:center;margin:0 0 4px">Yjeek Field CRM</h2><p class="mute" style="text-align:center;margin:0 0 18px">Vendor pipeline · Bahrain</p>
+  <div class="card"><label class="f">Your name</label><select id="ln"><option value="">Loading…</option></select>
+  <label class="f">PIN</label><input id="lp" type="password" inputmode="numeric" maxlength="6" placeholder="4–6 digits">
+  <div style="margin-top:14px"><button class="btn" style="width:100%" onclick="doLogin(this)">Sign in</button></div>
+  <p class="mute" id="lerr" style="margin:10px 0 0"></p></div></div>`;
+}
+async function loadReps() { try { const r = await fetch(API_URL, { method: 'POST', body: JSON.stringify({ action: 'reps' }) }).then(x => x.json()); const sel = $('#ln'); if (sel && r.reps) sel.innerHTML = '<option value="">Select…</option>' + r.reps.map(n => `<option>${esc(n)}</option>`).join(''); } catch (e) { const sel = $('#ln'); if (sel) sel.outerHTML = '<input id="ln" type="text" placeholder="Name as in the sheet">'; } }
+async function doLogin(btn) {
+  busy(btn, true);
+  try { const r = await fetch(API_URL, { method: 'POST', body: JSON.stringify({ action: 'login', name: $('#ln').value, pin: $('#lp').value }) }).then(x => x.json());
+    if (!r.ok) throw new Error(r.error || 'Sign-in failed');
+    S.token = r.token; S.user = r.user; S.meta = r.meta; try { localStorage.setItem('yjeek_crm', JSON.stringify({ token: S.token, user: S.user, meta: S.meta })); } catch (e) {} S.view = 'home'; render();
+  } catch (e) { $('#lerr').textContent = e.message; busy(btn, false); }
+}
+
+// ====================================================================== home (today)
+async function homeView() {
+  const m = $('#main'); m.innerHTML = `<div class="card"><input type="search" id="q" placeholder="Search vendor, CR, phone, area…" onkeydown="if(event.key==='Enter'){S.list.q=this.value;S.list.scope='all';go('vendors')}"></div><div id="due" class="card"><h2>Follow-ups due</h2><p class="mute">Loading…</p></div>`;
+  try {
+    const r = await api('vendors', { scope: 'due', rep: S.user.role === 'manager' ? '' : S.user.name });
+    const d = $('#due'); if (!d) return;
+    d.innerHTML = `<h2>Follow-ups due <span class="pill ${r.total ? 'red' : 'ok'}">${r.total}</span></h2>` + (r.total ? '<div class="list">' + r.vendors.map(vendorItem).join('') + '</div>' : '<p class="mute">Nothing overdue. Open Vendors to plan the day.</p>');
+  } catch (e) { toast(e.message, true); }
+}
+function vendorItem(v) {
+  const nd = v.next; const late = nd && nd < todayISO();
+  return `<a class="item" onclick="openVendor('${esc(v.vid)}')"><div class="t"><span>${esc(v.brand)} <span class="mute" style="font-weight:400">· ${esc(v.root)}</span></span>${statusPill(v.status)}</div>
+  <div class="s"><span>${esc(v.area || '—')}</span><span>${v.branches} branch${v.branches === 1 ? '' : 'es'}</span>${v.assigned ? '<span>' + esc(v.assigned) + '</span>' : '<span class="pill grey">unassigned</span>'}${nd ? `<span class="${late ? 'pill red' : ''}">next ${fmt(nd)}</span>` : ''}</div></a>`;
+}
+
+// ====================================================================== vendors list
+async function vendorsView() {
+  const L = S.list; const mgr = S.user.role === 'manager';
+  $('#main').innerHTML = `<div class="card">
+    <div class="seg" style="margin-bottom:8px">${['mine', 'due', 'unassigned', 'all'].map(s => `<button class="${L.scope === s ? 'on' : ''}" onclick="S.list.scope='${s}';S.list.page=1;vendorsView()">${{ mine: mgr ? 'Assigned' : 'Mine', due: 'Due', unassigned: 'Unassigned', all: 'All' }[s]}</button>`).join('')}</div>
+    <div class="row"><input class="grow" type="search" id="q" value="${esc(L.q)}" placeholder="Search…" onkeydown="if(event.key==='Enter'){S.list.q=this.value;S.list.page=1;vendorsView()}">
+    <select style="width:auto" onchange="S.list.status=this.value;S.list.page=1;vendorsView()"><option value="">Any status</option>${S.meta.statuses.map(s => `<option ${L.status === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
+    ${mgr ? `<select style="width:auto" onchange="S.list.rep=this.value;S.list.page=1;vendorsView()"><option value="">All reps</option>${S.meta.teams.map(s => `<option ${L.rep === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>` : ''}</div></div>
+    <div class="card"><div id="vl" class="list"><p class="mute">Loading…</p></div><div id="more"></div></div>`;
+  try {
+    const r = await api('vendors', { scope: L.scope, q: L.q, status: L.status, page: L.page, rep: mgr ? L.rep : S.user.name });
+    L.total = r.total; const vl = $('#vl'); if (!vl) return;
+    vl.innerHTML = `<p class="mute">${r.total} vendor${r.total === 1 ? '' : 's'}</p>` + (r.vendors.map(vendorItem).join('') || '<p class="mute">No vendors match.</p>');
+    if (r.total > L.page * 50) $('#more').innerHTML = `<div class="row" style="margin-top:8px"><button class="btn sec" onclick="S.list.page--;vendorsView()" ${L.page > 1 ? '' : 'disabled'}>‹ Prev</button><span class="mute grow" style="text-align:center">Page ${L.page} of ${Math.ceil(r.total / 50)}</span><button class="btn sec" onclick="S.list.page++;vendorsView()">Next ›</button></div>`;
+    else if (L.page > 1) $('#more').innerHTML = `<button class="btn sec" onclick="S.list.page--;vendorsView()">‹ Prev</button>`;
+  } catch (e) { toast(e.message, true); }
+}
+
+// ====================================================================== vendor detail
+async function openVendor(vid) {
+  S.prevView = S.view; S.view = 'vendor'; S.vendor = { brand: 'Loading…', vid: vid }; S.vtab = S.vtab || 'activity'; render();
+  try { const r = await api('vendor', { vid: vid }); S.vendor = r.vendor; render(); } catch (e) { toast(e.message, true); }
+}
+async function reloadVendor() { try { const r = await api('vendor', { vid: S.vendor.vid }); S.vendor = r.vendor; render(); } catch (e) { toast(e.message, true); } }
+function vendorView() {
+  const v = S.vendor; const m = $('#main'); if (!v.legal && v.brand === 'Loading…') { m.innerHTML = '<p class="mute">Loading…</p>'; return; }
+  const ph = tel(v.phone);
+  m.innerHTML = `<div class="card">
+    <div class="row" style="justify-content:space-between"><div><div style="font-weight:600;font-size:17px">${esc(v.brand)}</div><div class="mute">${esc(v.legal)} · CR ${esc(v.root)} · ${esc(v.segment)} ${v.tier ? '· ' + esc(v.tier) : ''}</div></div>${statusPill(v.status)}</div>
+    <div class="row" style="margin-top:10px;gap:14px"><span class="mute">${esc(v.area || '—')}</span><span class="mute">${v.branches} branch${v.branches === 1 ? '' : 'es'}</span><span class="mute">${v.assigned ? esc(v.assigned) : 'unassigned'}</span>${v.next ? `<span class="mute">next ${fmt(v.next)}</span>` : ''}</div>
+    <div class="row" style="margin-top:10px"><div class="grow"><div style="font-weight:500">${esc(v.dm || 'Decision maker unknown')}</div><div class="mute">${esc(v.phone || 'no number')} ${v.email ? '· ' + esc(v.email) : ''}</div></div>
+      ${ph ? `<a class="btn sm sec" href="tel:+${ph}">Call</a><a class="btn sm" style="background:#1B8F4B;border-color:#1B8F4B" href="https://wa.me/${ph}" target="_blank">WhatsApp</a>` : ''}
+      <button class="btn sm sec" onclick="editVendor()">Edit</button>${!v.assigned && S.user.role !== 'manager' ? `<button class="btn sm gold" onclick="claim()">Claim</button>` : ''}</div>
+    ${v.sync ? `<p class="mute" style="margin:8px 0 0">Contract: ${esc(v.sync)}</p>` : ''}
+  </div>
+  <div class="seg" style="margin-bottom:12px">${[['activity', 'Activity'], ['branches', 'Branches'], ['contract', 'Contract'], ['info', 'Info']].map(t => `<button class="${S.vtab === t[0] ? 'on' : ''}" onclick="S.vtab='${t[0]}';render()">${t[1]}</button>`).join('')}</div>
+  <div id="vt"></div>`;
+  ({ activity: activityTab, branches: branchesTab, contract: contractTab, info: infoTab })[S.vtab]();
+}
+function activityTab() {
+  const v = S.vendor; const M = S.meta;
+  $('#vt').innerHTML = `<div class="card"><h2>Log activity</h2>
+    <div class="grid2"><div><label class="f req">Activity</label><select id="a_act">${M.activities.map(a => `<option>${esc(a)}</option>`).join('')}</select></div><div><label class="f">Date</label><input type="date" id="a_date" value="${todayISO()}"></div></div>
+    <label class="f">Spoke to (name & role)</label><input type="text" id="a_spoke" value="${esc(v.dm)}">
+    <div class="grid2"><div><label class="f req">Outcome</label><select id="a_out">${M.outcomes.map(a => `<option>${esc(a)}</option>`).join('')}</select></div><div><label class="f">New status</label><select id="a_st"><option value="">keep ${esc(v.status || 'New')}</option>${M.statuses.map(a => `<option>${esc(a)}</option>`).join('')}</select></div></div>
+    <label class="f">Objection / needs</label><input type="text" id="a_obj" placeholder="e.g. commission too high, wants exclusivity waiver">
+    <label class="f">Terms discussed</label><input type="text" id="a_terms" placeholder="e.g. 12% food, weekly settlement">
+    <div class="grid2"><div><label class="f">Next step</label><input type="text" id="a_next" placeholder="e.g. send proposal"></div><div><label class="f">Next date</label><input type="date" id="a_nd" value="${plusDays(7)}"></div></div>
+    ${v.branchList && v.branchList.length > 1 ? `<label class="f">Branch (optional)</label><select id="a_br"><option value="">—</option>${v.branchList.map(b => `<option value="${esc(b.cr)}">${esc(b.cr)} · ${esc(b.Area)}</option>`).join('')}</select>` : ''}
+    <div style="margin-top:12px"><button class="btn" style="width:100%" onclick="saveActivity(this)" ${v.canEdit ? '' : 'disabled title="assigned to someone else"'}>Save</button></div></div>
+  <div class="card"><h2>History <span class="pill grey">${v.activityList.length}</span></h2>${v.activityList.map(a => `<div class="hist"><div class="d">${fmt(a.date)} · ${esc(a.rep)} · <b>${esc(a.activity)}</b>${a.branch ? ' · ' + esc(a.branch) : ''}</div><div>${esc(a.outcome)}${a.spoke ? ' — ' + esc(a.spoke) : ''}</div>${a.objection && a.objection !== '—' ? `<div class="mute">Objection: ${esc(a.objection)}</div>` : ''}${a.terms && a.terms !== '—' ? `<div class="mute">Terms: ${esc(a.terms)}</div>` : ''}${a.next ? `<div class="mute">Next: ${esc(a.next)} (${fmt(a.nextDate)})</div>` : ''}</div>`).join('') || '<p class="mute">No activity yet.</p>'}
+  ${v['Old Notes (history)'] ? `<details><summary class="mute">Older notes (previous sheet)</summary><pre style="white-space:pre-wrap;font:13px Inter">${esc(v['Old Notes (history)'])}</pre></details>` : ''}</div>`;
+}
+async function saveActivity(btn) {
+  busy(btn, true);
+  try { await api('logActivity', { vid: S.vendor.vid, activity: $('#a_act').value, date: $('#a_date').value, spoke: $('#a_spoke').value, outcome: $('#a_out').value, status: $('#a_st').value, objection: $('#a_obj').value, terms: $('#a_terms').value, next: $('#a_next').value, nextDate: $('#a_nd').value, branch: $('#a_br') ? $('#a_br').value : '' }); toast('Saved'); await reloadVendor(); } catch (e) { toast(e.message, true); busy(btn, false); }
+}
+async function claim() { try { await api('saveVendor', { vid: S.vendor.vid, fields: { 'Assigned To': S.user.name } }); toast('Assigned to you'); reloadVendor(); } catch (e) { toast(e.message, true); } }
+function editVendor() {
+  const v = S.vendor; const mgr = S.user.role === 'manager';
+  modal(`<h3>Edit vendor</h3><label class="f">Decision maker</label><input id="e_dm" value="${esc(v.dm)}"><label class="f">Best number</label><input id="e_ph" type="tel" value="${esc(v.phone)}"><label class="f">Email</label><input id="e_em" type="email" value="${esc(v.email)}">
+  <label class="f">Main area</label><input id="e_ar" value="${esc(v.area)}"><label class="f">Status</label><select id="e_st">${S.meta.statuses.map(a => `<option ${v.status === a ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>
+  ${mgr ? `<label class="f">Assigned to</label><select id="e_as"><option value="">— unassigned —</option>${S.meta.teams.map(a => `<option ${v.assigned === a ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>` : ''}
+  <label class="f">Short note</label><textarea id="e_nt">${esc(v.notes)}</textarea>
+  <div class="row" style="margin-top:12px"><button class="btn grow" onclick="saveVendor(this)">Save</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
+}
+async function saveVendor(btn) {
+  busy(btn, true); const f = { 'Decision Maker': $('#e_dm').value, 'Best Number': $('#e_ph').value, 'Email': $('#e_em').value, 'Main Area': $('#e_ar').value, 'Status': $('#e_st').value, 'Notes (short)': $('#e_nt').value }; if ($('#e_as')) f['Assigned To'] = $('#e_as').value;
+  try { await api('saveVendor', { vid: S.vendor.vid, fields: f }); closeModal(); toast('Saved'); reloadVendor(); } catch (e) { toast(e.message, true); busy(btn, false); }
+}
+function infoTab() {
+  const v = S.vendor; const kv = [['Legal (AR)', v['Legal Name (AR)']], ['Company type', v['Company Type']], ['Owners', v['Owners / Shareholders']], ['Signatories', v['Signatories']], ['Group', v['Group (management)']], ['CR expiry', v['CR Expiry (earliest)']], ['All numbers', v['All Numbers']], ['Previous reps', v['Previous Reps']], ['Old status', v['Old Status']], ['Branch CRs', v.branchCRs], ['Signed', fmt(v.signed)], ['Commission %', v.commission]];
+  $('#vt').innerHTML = `<div class="card"><div class="kv">${kv.filter(x => x[1] && x[1] !== '—').map(x => `<div>${x[0]}</div><div>${esc(x[1])}</div>`).join('')}</div></div>`;
+}
+
+// ---------------------------------------------------------------------- branches
+function branchesTab() {
+  const v = S.vendor; const bl = v.branchList || []; const joining = bl.filter(b => b.include && !b.closed).length;
+  $('#vt').innerHTML = `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Branches <span class="pill">${joining} of ${bl.filter(b => !b.closed).length} joining</span></h2><button class="btn sm" onclick="branchForm()">+ Add branch</button></div>
+  <p class="mute" style="margin:6px 0 10px">Tick the branches joining the contract. None ticked = all open branches join. Pins are located automatically.</p>
+  ${bl.map(b => `<div class="branch ${b.closed ? 'closed' : ''}"><input type="checkbox" ${b.include ? 'checked' : ''} ${b.closed ? 'disabled' : ''} onchange="tickBranch(${b.row},this)">
+    <div class="grow"><div class="row" style="justify-content:space-between"><b>${esc(b.cr)}</b>${b.closed ? '<span class="pill grey">closed</span>' : geoPill(b.geo)}</div>
+    <div class="mute">${esc([b.Area, b.Shop && 'Shop ' + b.Shop, b.Bldg && 'Bldg ' + b.Bldg, b.Road && 'Rd ' + b.Road, b.Block && 'Blk ' + b.Block].filter(Boolean).join(', ') || 'no address')}</div>
+    <div class="mute">${esc(b['Responsible Person'] || '—')} ${b['Branch Phone'] ? '· <a class="wa" href="https://wa.me/' + tel(b['Branch Phone']) + '" target="_blank">' + esc(b['Branch Phone']) + '</a>' : ''}</div>
+    ${b.matched ? `<div class="mute" style="font-size:12px">${esc(b.matched.slice(0, 110))} ${b.pin ? `<a href="${esc(b.pin)}" target="_blank">map</a>` : ''}</div>` : ''}
+    <div class="row" style="margin-top:6px"><button class="btn sm sec" onclick="branchForm(${b.row})">Edit</button><button class="btn sm sec" onclick="shiftsForm('${esc(b.cr)}')">Hours</button>${b.closed ? '' : `<button class="btn sm danger" onclick="closeBranch(${b.row})">Mark closed</button>`}</div></div></div>`).join('') || '<p class="mute">No branches — add the first one.</p>'}</div>`;
+}
+function branchOf(row) { return (S.vendor.branchList || []).find(b => b.row === row); }
+async function tickBranch(row, cb) { cb.disabled = true; try { const r = await api('saveBranch', { vid: S.vendor.vid, row: row, include: cb.checked }); if (r.geo && r.geo.confidence) toast('Pin: ' + r.geo.confidence); if (r.sync) toast(r.sync); const b = branchOf(row); if (b && r.branch) Object.assign(b, r.branch); branchesTab(); } catch (e) { toast(e.message, true); cb.checked = !cb.checked; cb.disabled = false; } }
+function branchForm(row) {
+  const b = row ? branchOf(row) : {}; const root = S.vendor.root;
+  modal(`<h3>${row ? 'Edit branch' : 'Add branch'}</h3><label class="f req">Branch CR</label><div class="row"><span class="mute">${esc(root)}-</span><input id="b_cr" class="grow" inputmode="numeric" value="${esc((b.cr || '').split('-')[1] || '')}" placeholder="serial after the dash"></div>
+  <div class="grid2"><div><label class="f req">Area</label><input id="b_area" value="${esc(b.Area)}"></div><div><label class="f">Block</label><input id="b_block" inputmode="numeric" value="${esc(b.Block)}"></div></div>
+  <div class="grid3"><div><label class="f">Shop</label><input id="b_shop" value="${esc(b.Shop)}"></div><div><label class="f">Building</label><input id="b_bldg" value="${esc(b.Bldg)}"></div><div><label class="f">Road</label><input id="b_road" value="${esc(b.Road)}"></div></div>
+  <label class="f">Contact person at branch</label><input id="b_rp" value="${esc(b['Responsible Person'])}"><div class="grid2"><div><label class="f">Branch phone</label><input id="b_ph" type="tel" value="${esc(b['Branch Phone'])}"></div><div><label class="f">Email</label><input id="b_em" type="email" value="${esc(b.Email)}"></div></div>
+  ${b.prev ? `<p class="mute">Previous: ${esc(b.prev)}</p>` : ''}
+  <div class="row" style="margin-top:12px"><button class="btn grow" onclick="saveBranch(${row || 0},this)">Save & locate</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
+}
+async function saveBranch(row, btn) {
+  busy(btn, true);
+  const f = { 'Branch CR': S.vendor.root + '-' + $('#b_cr').value.trim(), 'Area': $('#b_area').value, 'Block': $('#b_block').value, 'Shop': $('#b_shop').value, 'Bldg': $('#b_bldg').value, 'Road': $('#b_road').value, 'Responsible Person': $('#b_rp').value, 'Branch Phone': $('#b_ph').value, 'Email': $('#b_em').value };
+  try { const r = await api('saveBranch', { vid: S.vendor.vid, row: row || undefined, fields: f, include: row ? undefined : true }); closeModal(); toast((r.geo ? 'Located: ' + r.geo.confidence : 'Saved') + (r.sync ? ' · ' + r.sync : '')); reloadVendor(); } catch (e) { toast(e.message, true); busy(btn, false); }
+}
+async function closeBranch(row) { if (!confirm('Mark this branch as closed? It leaves the contract.')) return; try { const r = await api('saveBranch', { vid: S.vendor.vid, row: row, closed: true }); toast('Closed' + (r.sync ? ' · ' + r.sync : '')); reloadVendor(); } catch (e) { toast(e.message, true); } }
+// hours / shifts
+async function shiftsForm(cr) {
+  let rows = []; try { rows = (await api('shifts', { vid: S.vendor.vid, cr: cr })).shifts; } catch (e) {}
+  if (!rows.length) rows = [{ days: [true, true, true, true, true, false, true], shift: '1', from: '09:00', to: '23:00' }];
+  S.shiftRows = rows; S.shiftCR = cr;
+  modal(`<h3>Opening hours · ${esc(cr)}</h3><div id="sh_rows"></div><button class="btn sm sec" onclick="S.shiftRows.push({days:[false,false,false,false,false,false,false],shift:'2',from:'',to:''});drawShifts()">+ Add shift row</button>
+  <label class="f" style="margin-top:12px"><input type="checkbox" id="sh_all"> Apply the same hours to all ${(S.vendor.branchList || []).filter(b => !b.closed).length} branches</label>
+  <div class="row" style="margin-top:12px"><button class="btn grow" onclick="saveShifts(this)">Save</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
+  drawShifts();
+}
+function drawShifts() {
+  $('#sh_rows').innerHTML = S.shiftRows.map((r, i) => `<div class="card" style="padding:10px"><div class="days">${S.meta.days.map((d, k) => `<label class="${r.days[k] ? 'on' : ''}" onclick="S.shiftRows[${i}].days[${k}]=!S.shiftRows[${i}].days[${k}];drawShifts()">${d}</label>`).join('')}</div>
+  <div class="grid3" style="margin-top:8px"><div><label class="f">Shift</label><select onchange="S.shiftRows[${i}].shift=this.value;drawShifts()">${S.meta.shiftChoices.map(c => `<option ${r.shift === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+  <div><label class="f">From</label><input type="time" step="1800" value="${esc(r.from)}" ${/Off|24h/.test(r.shift) ? 'disabled' : ''} onchange="S.shiftRows[${i}].from=this.value"></div><div><label class="f">To</label><input type="time" step="1800" value="${esc(r.to === '24:00' ? '23:59' : r.to)}" ${/Off|24h/.test(r.shift) ? 'disabled' : ''} onchange="S.shiftRows[${i}].to=this.value"></div></div>
+  <div style="text-align:right;margin-top:6px"><button class="btn sm danger" onclick="S.shiftRows.splice(${i},1);drawShifts()">Remove</button></div></div>`).join('');
+}
+async function saveShifts(btn) {
+  busy(btn, true); const rows = S.shiftRows.map(r => ({ days: r.days, shift: r.shift, from: r.from, to: r.to === '23:59' ? '24:00' : r.to }));
+  const crs = $('#sh_all').checked ? (S.vendor.branchList || []).filter(b => !b.closed).map(b => b.cr) : [S.shiftCR];
+  try { await api('saveShifts', { vid: S.vendor.vid, crs: crs, rows: rows }); closeModal(); toast('Hours saved for ' + crs.length + ' branch' + (crs.length === 1 ? '' : 'es')); } catch (e) { toast(e.message, true); busy(btn, false); }
+}
+
+// ---------------------------------------------------------------------- contract
+function contractTab() {
+  const v = S.vendor; const t = v.terms; const el = $('#vt');
+  if (!t) { el.innerHTML = `<div class="card"><h2>Contract</h2><p class="mute">Step 1 sends the vendor and the ticked branches to the contract generator and brings back the default rates. Step 2 lets you adjust terms and generate the agreement.</p>
+    <p class="mute">Joining now: <b>${(v.branchList || []).filter(b => b.include && !b.closed).length || (v.branchList || []).filter(b => !b.closed).length}</b> branch(es). Check the Branches tab first.</p>
+    <button class="btn" style="width:100%" onclick="pushContract(this)" ${v.canEdit ? '' : 'disabled'}>Send to contracts</button></div>`; return; }
+  const gen = t.generatorStatus || ''; const locked = /Issued|Signed/.test(gen);
+  el.innerHTML = `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Contract terms</h2><span class="pill ${locked ? 'ok' : 'gold'}">${esc(gen || 'Draft')}</span></div>
+    <p class="mute" style="margin:6px 0 10px">${esc(t['Generation status'] || '')}</p>
+    ${t['Agreement PDF'] ? `<div class="row" style="margin-bottom:10px"><a class="btn sm" href="${esc(t['Agreement PDF'])}">⬇ Agreement PDF</a>${t['Branch Schedule PDF'] ? `<a class="btn sm sec" href="${esc(t['Branch Schedule PDF'])}">⬇ Branch schedule PDF</a>` : ''}${t['Contract Folder'] ? `<a class="btn sm sec" href="${esc(t['Contract Folder'])}" target="_blank">Folder</a>` : ''}</div>` : ''}
+    <div class="row" style="margin-bottom:8px"><button class="btn sm sec" onclick="pushContract(this)" ${locked ? 'disabled' : ''}>Re-send branches</button><span class="mute">(after ticking / editing branches)</span></div>
+    <div class="grid2d">${S.meta.termsCols.map(c => termField(c, t)).join('')}</div>
+    <div class="row" style="margin-top:14px"><button class="btn sec grow" onclick="saveTerms(this)" ${locked ? 'disabled' : ''}>Save terms</button><button class="btn gold grow" onclick="generateNow(this)" ${locked ? 'disabled' : ''}>Save & generate agreement</button></div>
+    <p class="mute" style="margin-top:8px">Blank = the standard rate from the fee document (shown underneath). Type a value only when something different was agreed with the vendor.</p></div>`;
+}
+function termField(c, t) {
+  const id = 'tf_' + c.h.replace(/[^a-z0-9]/gi, '_'); const v = t[c.h]; const def = t.defaults && t.defaults[c.h];
+  if (c.yn) return `<label class="f" style="display:flex;align-items:center;gap:8px;margin-top:12px"><input type="checkbox" id="${id}" data-h="${esc(c.h)}" ${v === true ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--green)"> ${esc(c.h)}</label>`;
+  if (c.list) return `<div><label class="f">${esc(c.h)}</label><select id="${id}" data-h="${esc(c.h)}"><option value="">—</option>${c.list.map(o => `<option ${v === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></div>`;
+  if (c.h === 'Category') return `<div><label class="f">Category</label><select id="${id}" data-h="Category"><option value="">—</option>${S.meta.categories.map(o => `<option ${v === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></div>`;
+  if (c.date) return `<div><label class="f req">${esc(c.h)}</label><input type="date" id="${id}" data-h="${esc(c.h)}" value="${esc(v || '')}"></div>`;
+  const req = /Signatory$|IBAN|Bank Name|Legal Business/.test(c.h) ? ' req' : '';
+  return `<div><label class="f${req}">${esc(c.h)}</label><input id="${id}" data-h="${esc(c.h)}" class="${c.rate ? 'rate' : ''}" value="${esc(v == null ? '' : v)}" ${c.h === 'Legal Business Name' ? 'readonly' : ''} placeholder="${def ? 'default: ' + esc(def) : ''}">${def ? `<div class="def">Default: ${esc(def)}</div>` : ''}</div>`;
+}
+function collectTerms() { const f = {}; document.querySelectorAll('[data-h]').forEach(el => { f[el.dataset.h] = el.type === 'checkbox' ? el.checked : el.value; }); return f; }
+async function pushContract(btn) { busy(btn, true); try { const r = await api('push', { vid: S.vendor.vid }); toast(r.message.slice(0, 120)); await reloadVendor(); S.vtab = 'contract'; render(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+async function saveTerms(btn) { busy(btn, true); try { await api('saveTerms', { vid: S.vendor.vid, fields: collectTerms() }); toast('Terms saved'); await reloadVendor(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+async function generateNow(btn) { busy(btn, true); try { await api('saveTerms', { vid: S.vendor.vid, fields: collectTerms() }); const r = await api('generate', { vid: S.vendor.vid }); toast(r.message, /Not generated|refused|Already/.test(r.message)); await reloadVendor(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+
+// ====================================================================== manager dashboard
+function periodRange(p) {
+  const d = new Date(); const iso = x => x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0');
+  const dow = (d.getDay() + 1) % 7;  // week starts Saturday
+  let a = new Date(d), b = new Date(d);
+  if (p === 'today') {} else if (p === 'week') { a.setDate(d.getDate() - dow); } else if (p === 'lastweek') { a.setDate(d.getDate() - dow - 7); b.setDate(d.getDate() - dow - 1); }
+  else if (p === 'month') { a = new Date(d.getFullYear(), d.getMonth(), 1); } else if (p === 'lastmonth') { a = new Date(d.getFullYear(), d.getMonth() - 1, 1); b = new Date(d.getFullYear(), d.getMonth(), 0); }
+  else if (p === 'quarter') { a = new Date(d.getFullYear(), Math.floor(d.getMonth() / 3) * 3, 1); } else if (p === 'year') { a = new Date(d.getFullYear(), 0, 1); }
+  else if (p === 'custom') { return { from: S.from || iso(a), to: S.to || iso(b) }; }
+  return { from: iso(a), to: iso(b) };
+}
+async function dashView() {
+  const m = $('#main'); const P = [['today', 'Today'], ['week', 'This week'], ['lastweek', 'Last week'], ['month', 'This month'], ['lastmonth', 'Last month'], ['quarter', 'Quarter'], ['year', 'Year'], ['custom', 'Custom']];
+  const r = periodRange(S.period);
+  m.innerHTML = `<div class="card"><div class="seg">${P.map(p => `<button class="${S.period === p[0] ? 'on' : ''}" onclick="S.period='${p[0]}';dashView()">${p[1]}</button>`).join('')}</div>
+    <div class="row" style="margin-top:8px"><input type="date" style="width:auto" value="${r.from}" onchange="S.from=this.value;S.period='custom';dashView()"><span class="mute">to</span><input type="date" style="width:auto" value="${r.to}" onchange="S.to=this.value;S.period='custom';dashView()">
+    <select style="width:auto" onchange="S.drep=this.value;dashView()"><option value="">All reps</option>${S.meta.reps.map(x => `<option ${S.drep === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select><button class="btn sm sec" onclick="syncNow(this)">Sync contracts</button></div></div>
+    <div id="dash"><p class="mute">Loading…</p></div>`;
+  try {
+    const d = await api('dashboard', { from: r.from, to: r.to, rep: S.drep }); S.dash = d; const T = d.tiles; const el = $('#dash'); if (!el) return;
+    el.innerHTML = `<div class="tiles">${[['activities', 'Activities'], ['visits', 'Visits'], ['signedInRange', 'Signed in period'], ['branchesSigned', 'Branches signed (now)'], ['contractSentNow', 'Contracts out'], ['overdue', 'Overdue follow-ups', 'warn'], ['dueToday', 'Due today'], ['signedVendors', 'Signed vendors (total)'], ['branchesJoining', 'Branches ticked to join'], ['unassigned', 'Unassigned vendors']].map(t => `<div class="tile ${t[2] && T[t[0]] ? 'warn' : ''}"><div class="n">${T[t[0]]}</div><div class="l">${t[1]}</div></div>`).join('')}</div>
+    <div class="grid2d" style="margin-top:12px"><div class="card"><h2>Activity per day</h2><div class="chart"><canvas id="c1"></canvas></div></div><div class="card"><h2>Activity by rep</h2><div class="chart"><canvas id="c2"></canvas></div></div>
+    <div class="card"><h2>Pipeline (current statuses)</h2><div class="chart"><canvas id="c3"></canvas></div></div><div class="card"><h2>Outcomes in period</h2><div class="chart"><canvas id="c4"></canvas></div></div></div>
+    <div class="card"><h2>Reps</h2><table class="tb"><tr><th>Rep</th><th>Vendors</th><th>Activities</th><th>Visits</th><th>Contracts out</th><th>Signed</th><th>Overdue</th></tr>${Object.keys(d.perRep).sort().map(n => { const a = d.byRep[n] || { total: 0, visits: 0 }; const p = d.perRep[n]; return `<tr><td>${esc(n)}</td><td>${p.vendors}</td><td>${a.total}</td><td>${a.visits}</td><td>${p.contractSent}</td><td>${p.signed}</td><td class="${p.overdue ? 'pill red' : ''}">${p.overdue}</td></tr>`; }).join('')}</table></div>`;
+    drawCharts(d);
+  } catch (e) { toast(e.message, true); }
+}
+function drawCharts(d) {
+  Object.values(S.charts).forEach(c => c.destroy()); S.charts = {};
+  const G = '#1D6A33', GOLD = '#CAA34D', L = '#8CC5A0', GR = '#9CA3AF'; const base = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } } } };
+  const lab = d.days.map(x => x.day.slice(5).split('-').reverse().join('/'));
+  S.charts.c1 = new Chart($('#c1'), { type: 'bar', data: { labels: lab, datasets: [{ label: 'Calls', data: d.days.map(x => x.calls), backgroundColor: G }, { label: 'Visits', data: d.days.map(x => x.visits), backgroundColor: GOLD }, { label: 'Meetings', data: d.days.map(x => x.meetings), backgroundColor: L }, { label: 'Other', data: d.days.map(x => x.other), backgroundColor: GR }] }, options: Object.assign({}, base, { scales: { x: { stacked: true, ticks: { maxTicksLimit: 12 } }, y: { stacked: true, beginAtZero: true } } }) });
+  const reps = Object.keys(d.byRep).sort();
+  S.charts.c2 = new Chart($('#c2'), { type: 'bar', data: { labels: reps, datasets: [{ label: 'Calls', data: reps.map(n => d.byRep[n].calls), backgroundColor: G }, { label: 'Visits', data: reps.map(n => d.byRep[n].visits), backgroundColor: GOLD }, { label: 'Meetings', data: reps.map(n => d.byRep[n].meetings), backgroundColor: L }] }, options: Object.assign({}, base, { scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }) });
+  const order = S.meta.statuses.filter(s => d.funnel[s]); const rest = Object.keys(d.funnel).filter(s => order.indexOf(s) < 0);
+  const fl = order.concat(rest);
+  S.charts.c3 = new Chart($('#c3'), { type: 'bar', data: { labels: fl, datasets: [{ label: 'Vendors', data: fl.map(s => d.funnel[s]), backgroundColor: fl.map(s => /Signed|Onboarded/.test(s) ? GOLD : /Not|Closed|Wrong|Duplicate/.test(s) ? GR : G) }] }, options: Object.assign({}, base, { indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true } } }) });
+  const oc = Object.keys(d.byOutcome).sort((a, b) => d.byOutcome[b] - d.byOutcome[a]).slice(0, 8);
+  S.charts.c4 = new Chart($('#c4'), { type: 'doughnut', data: { labels: oc, datasets: [{ data: oc.map(k => d.byOutcome[k]), backgroundColor: [G, GOLD, L, '#3F7D5A', '#E3C98A', GR, '#5B8F72', '#D9D9D9'] }] }, options: base });
+}
+async function syncNow(btn) { busy(btn, true); try { await api('sync'); toast('Contract statuses synced'); dashView(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+
+// ====================================================================== manager pin queue
+async function pinsView() {
+  const m = $('#main'); m.innerHTML = `<div class="card"><h2>Branches needing a pin check</h2><p class="mute">Only branches ticked to join a contract whose automatic location is Medium, Low, Review or Not found. Drag the pin to the right spot and save; or accept the address pin.</p><div id="pq" class="list"><p class="mute">Loading…</p></div></div><div class="card hide" id="pm"><div id="pmh"></div><div id="map"></div><div class="row" style="margin-top:10px"><button class="btn grow" onclick="savePin(this)">Save pin here</button><button class="btn sec" id="altBtn" onclick="useAlt()">Use address pin</button><button class="btn sec" onclick="relocate(this)">Re-run lookup</button></div></div>`;
+  try { const r = await api('geoQueue'); S.queue = r.queue; const el = $('#pq'); if (!el) return;
+    el.innerHTML = r.queue.length ? r.queue.map((q, i) => `<a class="item" onclick="pickPin(${i})"><div class="t"><span>${esc(q.brand)} · ${esc(q.cr)}</span>${geoPill(q.geo)}</div><div class="s"><span>${esc(q.area)} ${esc(q.address)}</span><span>${esc(q.assigned)}</span></div><div class="mute" style="font-size:12px">${esc(q.matched.slice(0, 140))}</div></a>`).join('') : '<p class="mute">Queue is empty — every joining branch has a trusted pin.</p>';
+  } catch (e) { toast(e.message, true); }
+}
+function pickPin(i) {
+  const q = S.queue[i]; S.pin = q; $('#pm').classList.remove('hide'); $('#pmh').innerHTML = `<b>${esc(q.brand)} · ${esc(q.cr)}</b><div class="mute">${esc(q.legal)} · ${esc(q.area)} ${esc(q.address)}</div><div class="mute" style="font-size:12px">${esc(q.matched)}</div>`;
+  const lat = Number(q.lat) || 26.2235, lng = Number(q.lng) || 50.5876;
+  if (!S.map) { S.map = L.map('map'); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(S.map); }
+  if (S.marker) S.marker.remove(); if (S.alt) { S.alt.remove(); S.alt = null; }
+  S.marker = L.marker([lat, lng], { draggable: true }).addTo(S.map).bindPopup('Drag me to the shop').openPopup();
+  if (q.alt) { S.alt = L.circleMarker([q.alt.lat, q.alt.lng], { radius: 8, color: '#CAA34D' }).addTo(S.map).bindPopup('Address pin'); S.map.fitBounds([[lat, lng], [q.alt.lat, q.alt.lng]], { padding: [30, 30] }); } else S.map.setView([lat, lng], q.lat ? 17 : 11);
+  $('#altBtn').classList.toggle('hide', !q.alt); setTimeout(() => S.map.invalidateSize(), 50); $('#pm').scrollIntoView({ behavior: 'smooth' });
+}
+function useAlt() { if (S.pin && S.pin.alt) S.marker.setLatLng([S.pin.alt.lat, S.pin.alt.lng]); }
+async function savePin(btn) { busy(btn, true); const p = S.marker.getLatLng(); try { const r = await api('setPin', { row: S.pin.row, lat: +p.lat.toFixed(6), lng: +p.lng.toFixed(6) }); toast('Pin saved' + (r.sync ? ' · ' + r.sync : '')); pinsView(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+async function relocate(btn) { busy(btn, true); try { const r = await api('geocode', { row: S.pin.row, force: true }); toast('Lookup: ' + r.geo.confidence); pinsView(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+
+// ====================================================================== modal
+function modal(html) { closeModal(); const d = document.createElement('div'); d.className = 'modal'; d.id = 'modal'; d.innerHTML = '<div class="box">' + html + '</div>'; d.addEventListener('click', e => { if (e.target === d) closeModal(); }); document.body.appendChild(d); }
+function closeModal() { const d = $('#modal'); if (d) d.remove(); }
+
+render(); if (!S.token) loadReps();
+</script>
+</body>
+</html>
