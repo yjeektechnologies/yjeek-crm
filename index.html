@@ -304,6 +304,7 @@ function contractTab() {
   if (!t) { el.innerHTML = `<div class="card"><h2>Contract</h2><p class="mute">Step 1 sends the vendor and the ticked branches to the contract generator and brings back the default rates. Step 2 lets you adjust terms and generate the agreement.</p>
     <p class="mute">Joining now: <b>${(v.branchList || []).filter(b => b.include && !b.closed).length || (v.branchList || []).filter(b => !b.closed).length}</b> branch(es). Check the Branches tab first.</p>
     <button class="btn" style="width:100%" onclick="pushContract(this)" ${v.canEdit ? '' : 'disabled'}>Send to contracts</button></div>`; return; }
+  if (!t.defaults && !t._loading) { t._loading = true; api('terms', { vid: v.vid }).then(r => { if (r.terms) { S.vendor.terms = r.terms; if (r.terms.categories && r.terms.categories.length) S.meta.categories = r.terms.categories; if (S.view === 'vendor' && S.vtab === 'contract') contractTab(); } }).catch(() => {}); }
   const gen = t.generatorStatus || ''; const locked = /Issued|Signed/.test(gen);
   el.innerHTML = `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Contract terms</h2><span class="pill ${locked ? 'ok' : 'gold'}">${esc(gen || 'Draft')}</span></div>
     <p class="mute" style="margin:6px 0 10px">${esc(t['Generation status'] || '')}</p>
