@@ -94,16 +94,20 @@ table.tb th{color:var(--mute);font-weight:500;font-size:12px}
 <div id="app"></div>
 <script>
 // ====================================================================== CONFIG
-const API_URL = 'https://script.google.com/macros/s/AKfycbxINyDbTGczIRdnKmKz3X3sx5PhnZOie87x7W1pdd3u4Sx7GQD5nZ3wf5Ygmf1DiSiVpw/exec';   // Apps Script → Deploy → Web app → URL ending in /exec
+const API_URL = 'https://script.google.com/macros/s/AKfycbxINyDbTGczIRdnKmKz3X3sx5PhnZOie87x7W1pdd3u4Sx7GQD5nZ3wf5Ygmf1DiSiVpw/exec';
+const DATA_URL = 'https://raw.githubusercontent.com/yjeektechnologies/yjeek-crm/main/data.json';   // snapshot published by the sheet script
+const REFRESH_MS = 3 * 60 * 1000;
 // ======================================================================
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const S = { token: null, user: null, meta: null, view: 'home', vendor: null, list: { scope: 'mine', q: '', status: '', page: 1, total: 0, items: [], rep: '' }, dash: null, charts: {}, period: 'week', from: '', to: '', drep: '' };
+const S = { token: null, user: null, meta: null, db: null, view: 'home', vendor: null, vtab: 'activity', list: { scope: 'mine', q: '', status: '', page: 1, rep: '' }, charts: {}, period: 'week', from: '', to: '', drep: '', edits: [], loading: false };
 try { const saved = JSON.parse(localStorage.getItem('yjeek_crm') || 'null'); if (saved && saved.token) { S.token = saved.token; S.user = saved.user; S.meta = saved.meta; } } catch (e) {}
+const CLOSED = ['Signed', 'Onboarded', 'Not interested', 'Closed/Invalid', 'Closed / Not operating', 'Duplicate'];
 
+// ---------------------------------------------------------------------- API (writes + sign-in only)
 async function api(action, params) {
   const body = Object.assign({ action: action, token: S.token }, params || {});
-  let res; try { res = await fetch(API_URL, { method: 'POST', body: JSON.stringify(body), redirect: 'follow' }); } catch (e) { throw new Error('No connection to the API'); }
+  let res; try { res = await fetch(API_URL, { method: 'POST', body: JSON.stringify(body), redirect: 'follow' }); } catch (e) { throw new Error('No connection — check internet'); }
   const data = await res.json();
   if (data.auth === false) { logout(); throw new Error('Session expired — sign in again'); }
   if (!data.ok) throw new Error(data.error || 'Request failed');
@@ -112,31 +116,75 @@ async function api(action, params) {
 function toast(msg, err) { const t = document.createElement('div'); t.className = 'toast' + (err ? ' err' : ''); t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), err ? 5000 : 2600); }
 function busy(btn, on) { if (!btn) return; if (on) { btn.dataset.t = btn.innerHTML; btn.innerHTML = '<span class="spin"></span>'; btn.disabled = true; } else { btn.innerHTML = btn.dataset.t || btn.innerHTML; btn.disabled = false; } }
 function logout() { S.token = null; S.user = null; try { localStorage.removeItem('yjeek_crm'); } catch (e) {} render(); }
-const fmt = d => d ? d.split('-').reverse().join('/') : '—';
+const fmt = d => d ? String(d).slice(0, 10).split('-').reverse().join('/') : '—';
 const todayISO = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
-const plusDays = n => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
-function statusPill(st) { const c = /Signed|Onboarded/.test(st) ? 'ok' : /Contract sent/.test(st) ? 'gold' : /Not interested|Closed|Wrong|Duplicate/.test(st) ? 'grey' : /Interested|Meeting|Visited/.test(st) ? '' : 'grey'; return '<span class="pill ' + c + '">' + esc(st || 'New') + '</span>'; }
+const plusDays = n => { const d = new Date(); d.setDate(d.getDate() + n); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+function statusPill(st) { const c = /Signed|Onboarded/.test(st) ? 'ok' : /Contract sent/.test(st) ? 'gold' : /Pending/.test(st) ? 'amber' : /Not interested|Closed|Wrong|Duplicate/.test(st) ? 'grey' : /Interested|Meeting|Visited/.test(st) ? '' : 'grey'; return '<span class="pill ' + c + '">' + esc(st || 'New') + '</span>'; }
 function geoPill(g) { if (!g) return '<span class="pill grey">no pin</span>'; const c = /Verified|High|Manual/.test(g) ? 'ok' : /Medium/.test(g) ? 'amber' : 'red'; return '<span class="pill ' + c + '">' + esc(g) + '</span>'; }
 function tel(n) { const d = String(n || '').replace(/[^\d]/g, ''); if (!d) return ''; return d.length === 8 ? '973' + d : d; }
+const inTeam = (assigned, name) => String(assigned || '').split('+').map(s => s.trim()).indexOf(name) > -1;
+
+// ---------------------------------------------------------------------- snapshot store (IndexedDB cache + in-memory indexes)
+const idb = {
+  open: () => new Promise((ok, no) => { const r = indexedDB.open('yjeek_crm', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }),
+  get: async k => { try { const d = await idb.open(); return await new Promise((ok, no) => { const r = d.transaction('kv').objectStore('kv').get(k); r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error); }); } catch (e) { return null; } },
+  set: async (k, v) => { try { const d = await idb.open(); await new Promise((ok, no) => { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = ok; t.onerror = () => no(t.error); }); } catch (e) {} }
+};
+function expand(tbl) { const k = tbl.k; return tbl.r.map(r => { const o = {}; k.forEach((key, i) => o[key] = r[i]); return o; }); }
+function buildDB(raw) {
+  const db = { generated: raw.generated, meta: raw.meta, vendors: expand(raw.vendors), branches: expand(raw.branches), activities: expand(raw.activities), terms: expand(raw.terms), pending: expand(raw.pending), byId: {}, brOf: {}, actOf: {}, termOf: {} };
+  db.vendors.forEach(v => { v.vid = String(v['Vendor ID']); v.pending = false; db.byId[v.vid] = v; });
+  db.branches.forEach(b => { b.vid = String(b['Vendor ID']); (db.brOf[b.vid] = db.brOf[b.vid] || []).push(b); });
+  Object.values(db.brOf).forEach(list => list.sort((a, c) => (Number(String(a['Branch CR']).split('-')[1]) || 0) - (Number(String(c['Branch CR']).split('-')[1]) || 0)));
+  db.activities.forEach(a => { a.vid = String(a['Vendor ID']); (db.actOf[a.vid] = db.actOf[a.vid] || []).push(a); });
+  Object.values(db.actOf).forEach(list => list.sort((a, c) => (c.Date > a.Date ? 1 : c.Date < a.Date ? -1 : c.row - a.row)));
+  db.terms.forEach(t => db.termOf[String(t['Vendor ID'])] = t);
+  db.pending.forEach(p => { p.vid = String(p['Root CR']); p.pending = true; });
+  return db;
+}
+function applyEdits(db) {   // re-apply our own recent changes on top of a (possibly older) snapshot
+  const cutoff = Date.now() - 15 * 60 * 1000; S.edits = S.edits.filter(e => e.t > cutoff);
+  S.edits.forEach(e => { try { e.fn(db); } catch (x) {} });
+}
+function remember(fn) { S.edits.push({ t: Date.now(), fn: fn }); fn(S.db); }
+async function loadDB(force) {
+  if (S.loading) return; S.loading = true;
+  try {
+    if (!S.db) { const cached = await idb.get('snapshot'); if (cached) { S.db = buildDB(cached); applyEdits(S.db); if (S.token) render(); } }
+    const r = await fetch(DATA_URL + '?v=' + Math.floor(Date.now() / 60000), { cache: 'no-store' });
+    if (!r.ok) throw new Error('snapshot ' + r.status);
+    const raw = await r.json();
+    if (!S.db || raw.generated !== S.db.generated || force) { S.db = buildDB(raw); applyEdits(S.db); idb.set('snapshot', raw); if (S.token) render(); }
+    S.dbError = '';
+  } catch (e) { S.dbError = e.message; if (!S.db && S.token) render(); }
+  finally { S.loading = false; }
+}
+setInterval(() => { if (S.token && document.visibilityState === 'visible') loadDB(); }, REFRESH_MS);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.token) loadDB(); });
+const M = () => (S.db && S.db.meta) || S.meta || { statuses: [], activities: [], outcomes: [], reps: [], teams: [], days: [], shiftChoices: [], termsCols: [] };
 
 // ====================================================================== shell
 function render() {
   const app = $('#app');
   if (!S.token) { app.innerHTML = loginView(); return; }
+  if (!S.db) { app.innerHTML = `<header class="top"><div class="logo">Y</div><h1>Yjeek CRM</h1></header><main><div class="card"><p class="mute">${S.dbError ? 'Could not load data: ' + esc(S.dbError) + ' <button class="btn sm sec" onclick="loadDB(true)">Retry</button>' : 'Loading data…'}</p></div></main>`; return; }
   const mgr = S.user.role === 'manager';
+  const age = Math.round((Date.now() - new Date(S.db.generated).getTime()) / 60000);
   app.innerHTML = `
   <header class="top">${S.view === 'vendor' ? '<button class="back" onclick="go(S.prevView||\'vendors\')">‹</button>' : '<div class="logo">Y</div>'}
-    <h1>${S.view === 'vendor' && S.vendor ? esc(S.vendor.brand) : { home: 'Today', vendors: 'Vendors', dash: 'Dashboard', pins: 'Pin check', team: 'Team' }[S.view] || 'Yjeek CRM'}</h1>
-    <span class="mute" style="color:#fff;opacity:.85;font-size:13px">${esc(S.user.name)}</span><button onclick="logout()">Sign out</button></header>
+    <h1>${S.view === 'vendor' && S.vendor ? esc(S.vendor['Brand (Trade Name)']) : { home: 'Today', vendors: 'Vendors', dash: 'Dashboard', pins: 'Pin check', approvals: 'Approvals' }[S.view] || 'Yjeek CRM'}</h1>
+    <span style="color:#fff;opacity:.8;font-size:12px" title="snapshot age">${age < 1 ? 'live' : age + ' min'}</span><span style="color:#fff;opacity:.85;font-size:13px">${esc(S.user.name)}</span><button onclick="logout()">Sign out</button></header>
   <main id="main"></main>
   <nav class="tabs">
     ${tab('home', 'Today', 'M3 12l9-9 9 9M5 10v10h14V10')}
     ${tab('vendors', 'Vendors', 'M4 6h16M4 12h16M4 18h10')}
     ${mgr ? tab('dash', 'Dashboard', 'M4 20V10M10 20V4M16 20v-7M22 20H2') : ''}
+    ${mgr ? tab('approvals', 'Approvals' + (pendingCount() ? ' (' + pendingCount() + ')' : ''), 'M9 12l2 2 4-4M12 22a10 10 0 100-20 10 10 0 000 20z') : ''}
     ${mgr ? tab('pins', 'Pins', 'M12 21s-7-6-7-11a7 7 0 0114 0c0 5-7 11-7 11zM12 10a2 2 0 100-4 2 2 0 000 4z') : ''}
   </nav>`;
-  ({ home: homeView, vendors: vendorsView, vendor: vendorView, dash: dashView, pins: pinsView })[S.view]();
+  ({ home: homeView, vendors: vendorsView, vendor: vendorView, dash: dashView, pins: pinsView, approvals: approvalsView })[S.view]();
 }
+const pendingCount = () => S.db ? S.db.pending.filter(p => p.Status === 'Pending').length : 0;
 const tab = (v, l, p) => `<button class="${S.view === v ? 'on' : ''}" onclick="go('${v}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${p}"/></svg>${l}</button>`;
 function go(v) { if (S.view !== 'vendor') S.prevView = S.view; S.view = v; render(); }
 
@@ -144,191 +192,306 @@ function go(v) { if (S.view !== 'vendor') S.prevView = S.view; S.view = v; rende
 function loginView() {
   return `<div class="login"><div class="logo">Y</div><h2 style="text-align:center;margin:0 0 4px">Yjeek Field CRM</h2><p class="mute" style="text-align:center;margin:0 0 18px">Vendor pipeline · Bahrain</p>
   <div class="card"><label class="f">Your name</label><select id="ln"><option value="">Loading…</option></select>
-  <label class="f">PIN</label><input id="lp" type="password" inputmode="numeric" maxlength="6" placeholder="4–6 digits">
-  <div style="margin-top:14px"><button class="btn" style="width:100%" onclick="doLogin(this)">Sign in</button></div>
+  <label class="f">PIN</label><input id="lp" type="password" inputmode="numeric" maxlength="6" placeholder="4–6 digits" onkeydown="if(event.key==='Enter')doLogin(document.querySelector('#lbtn'))">
+  <div style="margin-top:14px"><button id="lbtn" class="btn" style="width:100%" onclick="doLogin(this)">Sign in</button></div>
   <p class="mute" id="lerr" style="margin:10px 0 0"></p></div></div>`;
 }
-async function loadReps() { try { const r = await fetch(API_URL, { method: 'POST', body: JSON.stringify({ action: 'reps' }) }).then(x => x.json()); const sel = $('#ln'); if (sel && r.reps) sel.innerHTML = '<option value="">Select…</option>' + r.reps.map(n => `<option>${esc(n)}</option>`).join(''); } catch (e) { const sel = $('#ln'); if (sel) sel.outerHTML = '<input id="ln" type="text" placeholder="Name as in the sheet">'; } }
+async function loadReps() {
+  const sel = $('#ln'); if (!sel) return;
+  let reps = (S.db && S.db.meta.reps) || null;
+  if (!reps) { try { const r = await fetch(DATA_URL + '?v=' + Math.floor(Date.now() / 60000)).then(x => x.json()); reps = r.meta.reps; } catch (e) {} }
+  if (!reps) { try { const r = await fetch(API_URL, { method: 'POST', body: JSON.stringify({ action: 'reps' }) }).then(x => x.json()); reps = r.reps; } catch (e) {} }
+  if (reps && $('#ln')) $('#ln').innerHTML = '<option value="">Select…</option>' + reps.map(n => `<option>${esc(n)}</option>`).join('');
+  else if ($('#ln')) $('#ln').outerHTML = '<input id="ln" type="text" placeholder="Name as in the sheet">';
+}
 async function doLogin(btn) {
   busy(btn, true);
   try { const r = await fetch(API_URL, { method: 'POST', body: JSON.stringify({ action: 'login', name: $('#ln').value, pin: $('#lp').value }) }).then(x => x.json());
     if (!r.ok) throw new Error(r.error || 'Sign-in failed');
-    S.token = r.token; S.user = r.user; S.meta = r.meta; try { localStorage.setItem('yjeek_crm', JSON.stringify({ token: S.token, user: S.user, meta: S.meta })); } catch (e) {} S.view = 'home'; render();
+    S.token = r.token; S.user = r.user; S.meta = r.meta; try { localStorage.setItem('yjeek_crm', JSON.stringify({ token: S.token, user: S.user, meta: S.meta })); } catch (e) {}
+    S.view = 'home'; render(); loadDB();
   } catch (e) { $('#lerr').textContent = e.message; busy(btn, false); }
 }
 
-// ====================================================================== home (today)
-async function homeView() {
-  const m = $('#main'); m.innerHTML = `<div class="card"><input type="search" id="q" placeholder="Search vendor, CR, phone, area…" onkeydown="if(event.key==='Enter'){S.list.q=this.value;S.list.scope='all';go('vendors')}"></div><div id="due" class="card"><h2>Follow-ups due</h2><p class="mute">Loading…</p></div>`;
-  try {
-    const r = await api('vendors', { scope: 'due', rep: S.user.role === 'manager' ? '' : S.user.name });
-    const d = $('#due'); if (!d) return;
-    d.innerHTML = `<h2>Follow-ups due <span class="pill ${r.total ? 'red' : 'ok'}">${r.total}</span></h2>` + (r.total ? '<div class="list">' + r.vendors.map(vendorItem).join('') + '</div>' : '<p class="mute">Nothing overdue. Open Vendors to plan the day.</p>');
-  } catch (e) { toast(e.message, true); }
+// ====================================================================== queries on the snapshot
+function allVendors() { return S.db.vendors.concat(S.db.pending.filter(p => p.Status === 'Pending')); }
+function vendorsQuery(o) {
+  const q = (o.q || '').toLowerCase(); const today = todayISO(); const rep = o.rep;
+  const out = allVendors().filter(v => {
+    const asg = v.pending ? v.Rep : v['Assigned To'];
+    if (o.scope === 'mine' || o.scope === 'due') { if (rep ? !inTeam(asg, rep) : !asg) return false; }
+    else if (o.scope === 'unassigned') { if (asg) return false; }
+    else if (S.user.role === 'manager' && rep && !inTeam(asg, rep)) return false;
+    const st = v.pending ? 'Pending approval' : (v.Status || 'New');
+    if (o.status && st !== o.status) return false;
+    if (q) { const hay = [v.vid, v['Root CR'], v['Brand (Trade Name)'], v['Legal Name (EN)'], v['Main Area'], v['Decision Maker'], v['Best Number'], v['All Numbers']].join(' ').toLowerCase(); if (hay.indexOf(q) < 0) return false; }
+    if (o.scope === 'due') { const nd = v['Next Follow-up (auto)']; if (!nd || nd > today || CLOSED.indexOf(st) > -1) return false; }
+    return true;
+  });
+  const rank = v => { if (v.pending) return 0; const st = v.Status; if (CLOSED.indexOf(st) > -1) return 9e15; const nd = v['Next Follow-up (auto)']; return nd ? new Date(nd).getTime() : 8e15; };
+  out.sort((a, c) => rank(a) - rank(c) || String(a['Brand (Trade Name)']).localeCompare(String(c['Brand (Trade Name)'])));
+  return out;
 }
 function vendorItem(v) {
-  const nd = v.next; const late = nd && nd < todayISO();
-  return `<a class="item" onclick="openVendor('${esc(v.vid)}')"><div class="t"><span>${esc(v.brand)} <span class="mute" style="font-weight:400">· ${esc(v.root)}</span></span>${statusPill(v.status)}</div>
-  <div class="s"><span>${esc(v.area || '—')}</span><span>${v.branches} branch${v.branches === 1 ? '' : 'es'}</span>${v.assigned ? '<span>' + esc(v.assigned) + '</span>' : '<span class="pill grey">unassigned</span>'}${nd ? `<span class="${late ? 'pill red' : ''}">next ${fmt(nd)}</span>` : ''}</div></a>`;
+  const nd = v['Next Follow-up (auto)']; const late = nd && nd < todayISO(); const asg = v.pending ? v.Rep : v['Assigned To'];
+  const br = v.pending ? 1 : (Number(v.Branches) || (S.db.brOf[v.vid] || []).length);
+  return `<a class="item" onclick="openVendor('${esc(v.vid)}')"><div class="t"><span>${esc(v['Brand (Trade Name)'])} <span class="mute" style="font-weight:400">· ${esc(v['Root CR'])}</span></span>${statusPill(v.pending ? 'Pending approval' : v.Status)}</div>
+  <div class="s"><span>${esc(v['Main Area'] || '—')}</span><span>${br} branch${br === 1 ? '' : 'es'}</span>${asg ? '<span>' + esc(asg) + '</span>' : '<span class="pill grey">unassigned</span>'}${nd ? `<span class="${late ? 'pill red' : ''}">next ${fmt(nd)}</span>` : ''}</div></a>`;
+}
+
+// ====================================================================== home
+function homeView() {
+  const due = vendorsQuery({ scope: 'due', rep: S.user.role === 'manager' ? '' : S.user.name });
+  const mine = S.user.role === 'manager' ? null : vendorsQuery({ scope: 'mine', rep: S.user.name });
+  $('#main').innerHTML = `<div class="card"><input type="search" id="q" placeholder="Search vendor, CR, phone, area…" onkeydown="if(event.key==='Enter'){S.list.q=this.value;S.list.scope='all';S.list.page=1;go('vendors')}"></div>
+  ${mine ? `<div class="tiles" style="margin-bottom:12px"><div class="tile"><div class="n">${mine.length}</div><div class="l">My vendors</div></div><div class="tile ${due.length ? 'warn' : ''}"><div class="n">${due.length}</div><div class="l">Follow-ups due</div></div><div class="tile"><div class="n">${mine.filter(v => v.Status === 'Contract sent').length}</div><div class="l">Contracts out</div></div><div class="tile"><div class="n">${mine.filter(v => /Signed|Onboarded/.test(v.Status)).length}</div><div class="l">Signed</div></div></div>` : ''}
+  <div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Follow-ups due <span class="pill ${due.length ? 'red' : 'ok'}">${due.length}</span></h2><button class="btn sm" onclick="addVendorStart()">+ Add vendor</button></div>
+  <div class="list" style="margin-top:6px">${due.slice(0, 50).map(vendorItem).join('') || '<p class="mute">Nothing overdue.</p>'}</div></div>`;
 }
 
 // ====================================================================== vendors list
-async function vendorsView() {
+function vendorsView() {
   const L = S.list; const mgr = S.user.role === 'manager';
+  const all = vendorsQuery({ scope: L.scope, q: L.q, status: L.status, rep: mgr ? L.rep : S.user.name });
+  const page = all.slice((L.page - 1) * 50, L.page * 50);
   $('#main').innerHTML = `<div class="card">
     <div class="seg" style="margin-bottom:8px">${['mine', 'due', 'unassigned', 'all'].map(s => `<button class="${L.scope === s ? 'on' : ''}" onclick="S.list.scope='${s}';S.list.page=1;vendorsView()">${{ mine: mgr ? 'Assigned' : 'Mine', due: 'Due', unassigned: 'Unassigned', all: 'All' }[s]}</button>`).join('')}</div>
-    <div class="row"><input class="grow" type="search" id="q" value="${esc(L.q)}" placeholder="Search…" onkeydown="if(event.key==='Enter'){S.list.q=this.value;S.list.page=1;vendorsView()}">
-    <select style="width:auto" onchange="S.list.status=this.value;S.list.page=1;vendorsView()"><option value="">Any status</option>${S.meta.statuses.map(s => `<option ${L.status === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
-    ${mgr ? `<select style="width:auto" onchange="S.list.rep=this.value;S.list.page=1;vendorsView()"><option value="">All reps</option>${S.meta.teams.map(s => `<option ${L.rep === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>` : ''}</div></div>
-    <div class="card"><div id="vl" class="list"><p class="mute">Loading…</p></div><div id="more"></div></div>`;
-  try {
-    const r = await api('vendors', { scope: L.scope, q: L.q, status: L.status, page: L.page, rep: mgr ? L.rep : S.user.name });
-    L.total = r.total; const vl = $('#vl'); if (!vl) return;
-    vl.innerHTML = `<p class="mute">${r.total} vendor${r.total === 1 ? '' : 's'}</p>` + (r.vendors.map(vendorItem).join('') || '<p class="mute">No vendors match.</p>');
-    if (r.total > L.page * 50) $('#more').innerHTML = `<div class="row" style="margin-top:8px"><button class="btn sec" onclick="S.list.page--;vendorsView()" ${L.page > 1 ? '' : 'disabled'}>‹ Prev</button><span class="mute grow" style="text-align:center">Page ${L.page} of ${Math.ceil(r.total / 50)}</span><button class="btn sec" onclick="S.list.page++;vendorsView()">Next ›</button></div>`;
-    else if (L.page > 1) $('#more').innerHTML = `<button class="btn sec" onclick="S.list.page--;vendorsView()">‹ Prev</button>`;
-  } catch (e) { toast(e.message, true); }
+    <div class="row"><input class="grow" type="search" id="q" value="${esc(L.q)}" placeholder="Search…" oninput="S.list.q=this.value;S.list.page=1;clearTimeout(S.qt);S.qt=setTimeout(vendorsView,250)">
+    <select style="width:auto" onchange="S.list.status=this.value;S.list.page=1;vendorsView()"><option value="">Any status</option><option ${L.status === 'Pending approval' ? 'selected' : ''}>Pending approval</option>${M().statuses.map(s => `<option ${L.status === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
+    ${mgr ? `<select style="width:auto" onchange="S.list.rep=this.value;S.list.page=1;vendorsView()"><option value="">All reps</option>${M().teams.map(s => `<option ${L.rep === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>` : ''}
+    <button class="btn sm" onclick="addVendorStart()">+ Add</button></div></div>
+    <div class="card"><p class="mute">${all.length} vendor${all.length === 1 ? '' : 's'}</p><div class="list">${page.map(vendorItem).join('') || '<p class="mute">No vendors match.</p>'}</div>
+    ${all.length > 50 ? `<div class="row" style="margin-top:8px"><button class="btn sec" onclick="S.list.page--;vendorsView()" ${L.page > 1 ? '' : 'disabled'}>‹ Prev</button><span class="mute grow" style="text-align:center">Page ${L.page} of ${Math.ceil(all.length / 50)}</span><button class="btn sec" onclick="S.list.page++;vendorsView()" ${L.page * 50 < all.length ? '' : 'disabled'}>Next ›</button></div>` : ''}</div>`;
+  const q = $('#q'); if (q && document.activeElement !== q && L.q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+}
+
+// ====================================================================== add vendor (rep) → pending
+function addVendorStart() {
+  modal(`<h3>Add vendor</h3><p class="mute">Type the Root CR first — if it already exists you'll be taken to it.</p><label class="f req">Root CR</label><div class="row"><input id="av_cr" class="grow" inputmode="numeric" placeholder="e.g. 54879"><button class="btn" onclick="addVendorCheck()">Check</button></div><div id="av_res"></div>`);
+  setTimeout(() => $('#av_cr') && $('#av_cr').focus(), 50);
+}
+function addVendorCheck() {
+  const cr = $('#av_cr').value.trim(); if (!/^\d{3,8}$/.test(cr)) { $('#av_res').innerHTML = '<p class="mute">Numbers only (the root CR, without -1).</p>'; return; }
+  const hit = S.db.byId[cr] || S.db.vendors.find(v => String(v['Root CR']) === cr); const pend = S.db.pending.find(p => p.vid === cr && p.Status === 'Pending');
+  if (hit) { closeModal(); openVendor(hit.vid); toast('Already in the pipeline' + (hit['Assigned To'] ? ' — assigned to ' + hit['Assigned To'] : ' — unassigned, you can claim it')); return; }
+  if (pend) { closeModal(); openVendor(pend.vid); toast('Already submitted by ' + pend.Rep + ' — waiting for approval'); return; }
+  $('#av_res').innerHTML = `<p class="pill ok" style="margin:10px 0">Not in the pipeline — fill in the details</p>
+    <label class="f req">Brand / trade name</label><input id="av_brand"><label class="f">Legal name (as on CR)</label><input id="av_legal">
+    <div class="grid2"><div><label class="f req">Segment</label><select id="av_seg">${['Restaurant', 'Cafe', 'Bakery / Sweets', 'Catering', 'Supermarket', 'Pharmacy', 'Flowers & Gifts', 'Electronics', 'Perfume', 'Cosmetics', 'Clothing', 'Salon', 'Spa', 'Cleaning', 'Other'].map(s => `<option>${s}</option>`).join('')}</select><input id="av_seg_other" placeholder="Specify the new type" class="hide" style="margin-top:6px"></div><div><label class="f req">Main area</label><input id="av_area"></div></div>
+    <div class="grid2"><div><label class="f">Decision maker</label><input id="av_dm"></div><div><label class="f req">Best number</label><input id="av_ph" type="tel"></div></div>
+    <label class="f">Email</label><input id="av_em" type="email">
+    <h3 style="margin-top:14px;font-size:15px">First branch</h3>
+    <div class="grid2"><div><label class="f">Branch CR serial</label><div class="row"><span class="mute">${cr}-</span><input id="av_bcr" class="grow" inputmode="numeric" value="1"></div></div><div><label class="f">Branch area</label><input id="av_barea"></div></div>
+    <div class="grid4" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px"><div><label class="f">Shop</label><input id="av_shop"></div><div><label class="f">Bldg</label><input id="av_bldg"></div><div><label class="f">Road</label><input id="av_road"></div><div><label class="f">Block</label><input id="av_block"></div></div>
+    <div class="grid2"><div><label class="f">Contact at branch</label><input id="av_rp"></div><div><label class="f">Branch phone</label><input id="av_bph" type="tel"></div></div>
+    <label class="f">Notes</label><textarea id="av_notes"></textarea>
+    <div class="row" style="margin-top:12px"><button class="btn grow" onclick="addVendorSave('${cr}',this)">Submit for approval</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`;
+  $('#av_seg').onchange = e => $('#av_seg_other').classList.toggle('hide', e.target.value !== 'Other');
+}
+async function addVendorSave(cr, btn) {
+  const seg = $('#av_seg').value === 'Other' ? $('#av_seg_other').value.trim() : $('#av_seg').value;
+  const f = { 'Root CR': cr, 'Brand (Trade Name)': $('#av_brand').value, 'Legal Name (EN)': $('#av_legal').value, 'Segment': seg, 'Main Area': $('#av_area').value, 'Decision Maker': $('#av_dm').value, 'Best Number': $('#av_ph').value, 'Email': $('#av_em').value,
+    'Branch CR': cr + '-' + ($('#av_bcr').value.trim() || '1'), 'Branch Area': $('#av_barea').value || $('#av_area').value, 'Shop': $('#av_shop').value, 'Bldg': $('#av_bldg').value, 'Road': $('#av_road').value, 'Block': $('#av_block').value, 'Responsible Person': $('#av_rp').value, 'Branch Phone': $('#av_bph').value, 'Notes': $('#av_notes').value };
+  if (!f['Brand (Trade Name)'].trim() || !seg || !f['Main Area'].trim() || !f['Best Number'].trim()) { toast('Brand, segment, area and number are required', true); return; }
+  busy(btn, true);
+  try { const r = await api('addVendor', { fields: f });
+    const p = Object.assign({ 'Pending ID': r.id, Submitted: todayISO(), Rep: S.user.name, Status: 'Pending', row: r.row, vid: cr, pending: true }, f);
+    remember(db => { if (!db.pending.some(x => x['Pending ID'] === r.id)) db.pending.push(p); });
+    closeModal(); toast('Submitted — a manager will approve it'); openVendor(cr);
+  } catch (e) { toast(e.message, true); busy(btn, false); }
 }
 
 // ====================================================================== vendor detail
-async function openVendor(vid) {
-  S.prevView = S.view; S.view = 'vendor'; S.vendor = { brand: 'Loading…', vid: vid }; S.vtab = S.vtab || 'activity'; render();
-  try { const r = await api('vendor', { vid: vid }); S.vendor = r.vendor; render(); } catch (e) { toast(e.message, true); }
-}
-async function reloadVendor() { try { const r = await api('vendor', { vid: S.vendor.vid }); S.vendor = r.vendor; render(); } catch (e) { toast(e.message, true); } }
+function findVendor(vid) { return S.db.byId[vid] || S.db.pending.find(p => p.vid === vid && p.Status === 'Pending') || S.db.pending.find(p => p.vid === vid) || null; }
+function openVendor(vid) { const v = findVendor(vid); if (!v) { toast('Vendor not found', true); return; } S.prevView = S.view === 'vendor' ? S.prevView : S.view; S.view = 'vendor'; S.vendor = v; S.vtab = v.pending ? 'activity' : (S.vtab || 'activity'); render(); window.scrollTo(0, 0); }
+function canEdit(v) { const asg = v.pending ? v.Rep : v['Assigned To']; return S.user.role === 'manager' || !asg || inTeam(asg, S.user.name); }
 function vendorView() {
-  const v = S.vendor; const m = $('#main'); if (!v.legal && v.brand === 'Loading…') { m.innerHTML = '<p class="mute">Loading…</p>'; return; }
-  const ph = tel(v.phone);
+  const v = S.vendor; const m = $('#main'); const ph = tel(v['Best Number']); const asg = v.pending ? v.Rep : v['Assigned To'];
+  const brs = v.pending ? [] : (S.db.brOf[v.vid] || []);
   m.innerHTML = `<div class="card">
-    <div class="row" style="justify-content:space-between"><div><div style="font-weight:600;font-size:17px">${esc(v.brand)}</div><div class="mute">${esc(v.legal)} · CR ${esc(v.root)} · ${esc(v.segment)} ${v.tier ? '· ' + esc(v.tier) : ''}</div></div>${statusPill(v.status)}</div>
-    <div class="row" style="margin-top:10px;gap:14px"><span class="mute">${esc(v.area || '—')}</span><span class="mute">${v.branches} branch${v.branches === 1 ? '' : 'es'}</span><span class="mute">${v.assigned ? esc(v.assigned) : 'unassigned'}</span>${v.next ? `<span class="mute">next ${fmt(v.next)}</span>` : ''}</div>
-    <div class="row" style="margin-top:10px"><div class="grow"><div style="font-weight:500">${esc(v.dm || 'Decision maker unknown')}</div><div class="mute">${esc(v.phone || 'no number')} ${v.email ? '· ' + esc(v.email) : ''}</div></div>
+    ${v.pending ? `<div class="pill amber" style="margin-bottom:8px">Pending approval${v.Status !== 'Pending' ? ' · ' + esc(v.Status) + (v.Reason ? ': ' + esc(v.Reason) : '') : ''}</div>` : ''}
+    <div class="row" style="justify-content:space-between"><div><div style="font-weight:600;font-size:17px">${esc(v['Brand (Trade Name)'])}</div><div class="mute">${esc(v['Legal Name (EN)'])} · CR ${esc(v['Root CR'])} · ${esc(v.Segment)} ${v.Tier ? '· ' + esc(v.Tier) : ''}</div></div>${statusPill(v.pending ? 'Pending approval' : v.Status)}</div>
+    <div class="row" style="margin-top:10px;gap:14px"><span class="mute">${esc(v['Main Area'] || '—')}</span><span class="mute">${v.pending ? 1 : brs.length} branch${brs.length === 1 ? '' : 'es'}</span><span class="mute">${asg ? esc(asg) : 'unassigned'}</span>${v['Next Follow-up (auto)'] ? `<span class="mute">next ${fmt(v['Next Follow-up (auto)'])}</span>` : ''}</div>
+    <div class="row" style="margin-top:10px"><div class="grow"><div style="font-weight:500">${esc(v['Decision Maker'] || 'Decision maker unknown')}</div><div class="mute">${esc(v['Best Number'] || 'no number')} ${v.Email ? '· ' + esc(v.Email) : ''}</div></div>
       ${ph ? `<a class="btn sm sec" href="tel:+${ph}">Call</a><a class="btn sm" style="background:#1B8F4B;border-color:#1B8F4B" href="https://wa.me/${ph}" target="_blank">WhatsApp</a>` : ''}
-      <button class="btn sm sec" onclick="editVendor()">Edit</button>${!v.assigned && S.user.role !== 'manager' ? `<button class="btn sm gold" onclick="claim()">Claim</button>` : ''}</div>
-    ${v.sync ? `<p class="mute" style="margin:8px 0 0">Contract: ${esc(v.sync)}</p>` : ''}
+      ${v.pending ? '' : `<button class="btn sm sec" onclick="editVendor()">Edit</button>`}${!asg && S.user.role !== 'manager' && !v.pending ? `<button class="btn sm gold" onclick="claim()">Claim</button>` : ''}</div>
+    ${v['Contract sync'] ? `<p class="mute" style="margin:8px 0 0">Contract: ${esc(v['Contract sync'])}</p>` : ''}
   </div>
-  <div class="seg" style="margin-bottom:12px">${[['activity', 'Activity'], ['branches', 'Branches'], ['contract', 'Contract'], ['info', 'Info']].map(t => `<button class="${S.vtab === t[0] ? 'on' : ''}" onclick="S.vtab='${t[0]}';render()">${t[1]}</button>`).join('')}</div>
+  <div class="seg" style="margin-bottom:12px">${(v.pending ? [['activity', 'Activity'], ['info', 'Info']] : [['activity', 'Activity'], ['branches', 'Branches'], ['contract', 'Contract'], ['info', 'Info']]).map(t => `<button class="${S.vtab === t[0] ? 'on' : ''}" onclick="S.vtab='${t[0]}';render()">${t[1]}</button>`).join('')}</div>
   <div id="vt"></div>`;
   ({ activity: activityTab, branches: branchesTab, contract: contractTab, info: infoTab })[S.vtab]();
 }
 function activityTab() {
-  const v = S.vendor; const M = S.meta;
+  const v = S.vendor; const acts = S.db.actOf[v.vid] || []; const brs = v.pending ? [] : (S.db.brOf[v.vid] || []);
   $('#vt').innerHTML = `<div class="card"><h2>Log activity</h2>
-    <div class="grid2"><div><label class="f req">Activity</label><select id="a_act">${M.activities.map(a => `<option>${esc(a)}</option>`).join('')}</select></div><div><label class="f">Date</label><input type="date" id="a_date" value="${todayISO()}"></div></div>
-    <label class="f">Spoke to (name & role)</label><input type="text" id="a_spoke" value="${esc(v.dm)}">
-    <div class="grid2"><div><label class="f req">Outcome</label><select id="a_out">${M.outcomes.map(a => `<option>${esc(a)}</option>`).join('')}</select></div><div><label class="f">New status</label><select id="a_st"><option value="">keep ${esc(v.status || 'New')}</option>${M.statuses.map(a => `<option>${esc(a)}</option>`).join('')}</select></div></div>
-    <label class="f">Objection / needs</label><input type="text" id="a_obj" placeholder="e.g. commission too high, wants exclusivity waiver">
-    <label class="f">Terms discussed</label><input type="text" id="a_terms" placeholder="e.g. 12% food, weekly settlement">
+    <div class="grid2"><div><label class="f req">Activity</label><select id="a_act">${M().activities.map(a => `<option>${esc(a)}</option>`).join('')}</select></div><div><label class="f">Date</label><input type="date" id="a_date" value="${todayISO()}"></div></div>
+    <label class="f">Spoke to (name & role)</label><input type="text" id="a_spoke" value="${esc(v['Decision Maker'])}">
+    <div class="grid2"><div><label class="f req">Outcome</label><select id="a_out">${M().outcomes.map(a => `<option>${esc(a)}</option>`).join('')}</select></div><div><label class="f">New status</label><select id="a_st" ${v.pending ? 'disabled' : ''}><option value="">keep ${esc(v.Status || 'New')}</option>${M().statuses.map(a => `<option>${esc(a)}</option>`).join('')}</select></div></div>
+    <label class="f">Objection / needs</label><input type="text" id="a_obj" placeholder="e.g. commission too high">
+    <label class="f">Terms discussed</label><input type="text" id="a_terms" placeholder="e.g. 12%, weekly settlement">
     <div class="grid2"><div><label class="f">Next step</label><input type="text" id="a_next" placeholder="e.g. send proposal"></div><div><label class="f">Next date</label><input type="date" id="a_nd" value="${plusDays(7)}"></div></div>
-    ${v.branchList && v.branchList.length > 1 ? `<label class="f">Branch (optional)</label><select id="a_br"><option value="">—</option>${v.branchList.map(b => `<option value="${esc(b.cr)}">${esc(b.cr)} · ${esc(b.Area)}</option>`).join('')}</select>` : ''}
-    <div style="margin-top:12px"><button class="btn" style="width:100%" onclick="saveActivity(this)" ${v.canEdit ? '' : 'disabled title="assigned to someone else"'}>Save</button></div></div>
-  <div class="card"><h2>History <span class="pill grey">${v.activityList.length}</span></h2>${v.activityList.map(a => `<div class="hist"><div class="d">${fmt(a.date)} · ${esc(a.rep)} · <b>${esc(a.activity)}</b>${a.branch ? ' · ' + esc(a.branch) : ''}</div><div>${esc(a.outcome)}${a.spoke ? ' — ' + esc(a.spoke) : ''}</div>${a.objection && a.objection !== '—' ? `<div class="mute">Objection: ${esc(a.objection)}</div>` : ''}${a.terms && a.terms !== '—' ? `<div class="mute">Terms: ${esc(a.terms)}</div>` : ''}${a.next ? `<div class="mute">Next: ${esc(a.next)} (${fmt(a.nextDate)})</div>` : ''}</div>`).join('') || '<p class="mute">No activity yet.</p>'}
+    ${brs.length > 1 ? `<label class="f">Branch (optional)</label><select id="a_br"><option value="">—</option>${brs.map(b => `<option value="${esc(b['Branch CR'])}">${esc(b['Branch CR'])} · ${esc(b.Area)}</option>`).join('')}</select>` : ''}
+    <div style="margin-top:12px"><button class="btn" style="width:100%" onclick="saveActivity(this)" ${canEdit(v) ? '' : 'disabled title="assigned to someone else"'}>Save</button></div></div>
+  <div class="card"><h2>History <span class="pill grey">${acts.length}</span></h2>${acts.slice(0, 60).map(a => `<div class="hist"><div class="d">${fmt(a.Date)} · ${esc(a.Salesperson)} · <b>${esc(a.Activity)}</b>${a['Branch CR (optional)'] ? ' · ' + esc(a['Branch CR (optional)']) : ''}${a._local ? ' · <span class="pill amber">saving…</span>' : ''}</div><div>${esc(a.Outcome)}${a['Spoke To (name & role)'] && a['Spoke To (name & role)'] !== '—' ? ' — ' + esc(a['Spoke To (name & role)']) : ''}</div>${a['Objection / Needs'] && a['Objection / Needs'] !== '—' ? `<div class="mute">Objection: ${esc(a['Objection / Needs'])}</div>` : ''}${a['Terms Discussed'] && a['Terms Discussed'] !== '—' ? `<div class="mute">Terms: ${esc(a['Terms Discussed'])}</div>` : ''}${a['Next Step'] ? `<div class="mute">Next: ${esc(a['Next Step'])} (${fmt(a['Next Date'])})</div>` : ''}</div>`).join('') || '<p class="mute">No activity yet.</p>'}
   ${v['Old Notes (history)'] ? `<details><summary class="mute">Older notes (previous sheet)</summary><pre style="white-space:pre-wrap;font:13px Inter">${esc(v['Old Notes (history)'])}</pre></details>` : ''}</div>`;
 }
 async function saveActivity(btn) {
-  busy(btn, true);
-  try { await api('logActivity', { vid: S.vendor.vid, activity: $('#a_act').value, date: $('#a_date').value, spoke: $('#a_spoke').value, outcome: $('#a_out').value, status: $('#a_st').value, objection: $('#a_obj').value, terms: $('#a_terms').value, next: $('#a_next').value, nextDate: $('#a_nd').value, branch: $('#a_br') ? $('#a_br').value : '' }); toast('Saved'); await reloadVendor(); } catch (e) { toast(e.message, true); busy(btn, false); }
+  const v = S.vendor; const p = { vid: v.vid, activity: $('#a_act').value, date: $('#a_date').value, spoke: $('#a_spoke').value, outcome: $('#a_out').value, status: $('#a_st') ? $('#a_st').value : '', objection: $('#a_obj').value, terms: $('#a_terms').value, next: $('#a_next').value, nextDate: $('#a_nd').value, branch: $('#a_br') ? $('#a_br').value : '' };
+  const a = { Date: p.date, Salesperson: S.user.name, 'Vendor ID': v.vid, vid: v.vid, 'Branch CR (optional)': p.branch, Activity: p.activity, 'Spoke To (name & role)': p.spoke, Outcome: p.outcome, 'Objection / Needs': p.objection, 'Terms Discussed': p.terms, 'Next Step': p.next, 'Next Date': p.nextDate, row: 1e9, _local: true };
+  const id = Date.now();
+  remember(db => { const list = db.actOf[v.vid] = db.actOf[v.vid] || []; if (!list.some(x => x._id === id)) { a._id = id; list.unshift(a); }
+    const vv = db.byId[v.vid]; if (vv) { vv['Last Contact (auto)'] = p.date; vv['Next Follow-up (auto)'] = p.nextDate; if (p.status) vv.Status = p.status; if (/visit|meeting/i.test(p.activity)) vv['Visit Done'] = 'Yes'; if (!vv['Assigned To']) vv['Assigned To'] = S.user.name; vv['Activities (auto)'] = (Number(vv['Activities (auto)']) || 0) + 1; } });
+  render(); toast('Saved');
+  api('logActivity', p).then(() => { a._local = false; if (S.view === 'vendor' && S.vtab === 'activity') activityTab(); }).catch(e => { toast('Not saved: ' + e.message, true); const list = S.db.actOf[v.vid]; const i = list.indexOf(a); if (i > -1) list.splice(i, 1); render(); });
 }
-async function claim() { try { await api('saveVendor', { vid: S.vendor.vid, fields: { 'Assigned To': S.user.name } }); toast('Assigned to you'); reloadVendor(); } catch (e) { toast(e.message, true); } }
+async function claim() { const v = S.vendor; remember(db => { const vv = db.byId[v.vid]; if (vv) vv['Assigned To'] = S.user.name; }); render(); toast('Assigned to you'); api('saveVendor', { vid: v.vid, fields: { 'Assigned To': S.user.name } }).catch(e => toast(e.message, true)); }
 function editVendor() {
   const v = S.vendor; const mgr = S.user.role === 'manager';
-  modal(`<h3>Edit vendor</h3><label class="f">Decision maker</label><input id="e_dm" value="${esc(v.dm)}"><label class="f">Best number</label><input id="e_ph" type="tel" value="${esc(v.phone)}"><label class="f">Email</label><input id="e_em" type="email" value="${esc(v.email)}">
-  <label class="f">Main area</label><input id="e_ar" value="${esc(v.area)}"><label class="f">Status</label><select id="e_st">${S.meta.statuses.map(a => `<option ${v.status === a ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>
-  ${mgr ? `<label class="f">Assigned to</label><select id="e_as"><option value="">— unassigned —</option>${S.meta.teams.map(a => `<option ${v.assigned === a ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>` : ''}
-  <label class="f">Short note</label><textarea id="e_nt">${esc(v.notes)}</textarea>
+  modal(`<h3>Edit vendor</h3><label class="f">Decision maker</label><input id="e_dm" value="${esc(v['Decision Maker'])}"><label class="f">Best number</label><input id="e_ph" type="tel" value="${esc(v['Best Number'])}"><label class="f">Email</label><input id="e_em" type="email" value="${esc(v.Email)}">
+  <label class="f">Main area</label><input id="e_ar" value="${esc(v['Main Area'])}"><label class="f">Status</label><select id="e_st">${M().statuses.map(a => `<option ${v.Status === a ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>
+  ${mgr ? `<label class="f">Assigned to</label><select id="e_as"><option value="">— unassigned —</option>${M().teams.map(a => `<option ${v['Assigned To'] === a ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>` : ''}
+  <label class="f">Short note</label><textarea id="e_nt">${esc(v['Notes (short)'])}</textarea>
   <div class="row" style="margin-top:12px"><button class="btn grow" onclick="saveVendor(this)">Save</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
 }
 async function saveVendor(btn) {
-  busy(btn, true); const f = { 'Decision Maker': $('#e_dm').value, 'Best Number': $('#e_ph').value, 'Email': $('#e_em').value, 'Main Area': $('#e_ar').value, 'Status': $('#e_st').value, 'Notes (short)': $('#e_nt').value }; if ($('#e_as')) f['Assigned To'] = $('#e_as').value;
-  try { await api('saveVendor', { vid: S.vendor.vid, fields: f }); closeModal(); toast('Saved'); reloadVendor(); } catch (e) { toast(e.message, true); busy(btn, false); }
+  const v = S.vendor; const f = { 'Decision Maker': $('#e_dm').value, 'Best Number': $('#e_ph').value, 'Email': $('#e_em').value, 'Main Area': $('#e_ar').value, 'Status': $('#e_st').value, 'Notes (short)': $('#e_nt').value }; if ($('#e_as')) f['Assigned To'] = $('#e_as').value;
+  remember(db => { const vv = db.byId[v.vid]; if (vv) Object.keys(f).forEach(k => vv[k] = f[k]); });
+  closeModal(); render(); toast('Saved');
+  api('saveVendor', { vid: v.vid, fields: f }).catch(e => toast('Not saved: ' + e.message, true));
 }
 function infoTab() {
-  const v = S.vendor; const kv = [['Legal (AR)', v['Legal Name (AR)']], ['Company type', v['Company Type']], ['Owners', v['Owners / Shareholders']], ['Signatories', v['Signatories']], ['Group', v['Group (management)']], ['CR expiry', v['CR Expiry (earliest)']], ['All numbers', v['All Numbers']], ['Previous reps', v['Previous Reps']], ['Old status', v['Old Status']], ['Branch CRs', v.branchCRs], ['Signed', fmt(v.signed)], ['Commission %', v.commission]];
-  $('#vt').innerHTML = `<div class="card"><div class="kv">${kv.filter(x => x[1] && x[1] !== '—').map(x => `<div>${x[0]}</div><div>${esc(x[1])}</div>`).join('')}</div></div>`;
+  const v = S.vendor; const kv = v.pending ? [['Submitted', fmt(v.Submitted)], ['By', v.Rep], ['Legal name', v['Legal Name (EN)']], ['Branch CR', v['Branch CR']], ['Branch address', [v['Branch Area'], v.Shop && 'Shop ' + v.Shop, v.Bldg && 'Bldg ' + v.Bldg, v.Road && 'Rd ' + v.Road, v.Block && 'Blk ' + v.Block].filter(Boolean).join(', ')], ['Branch contact', [v['Responsible Person'], v['Branch Phone']].filter(Boolean).join(' · ')], ['Notes', v.Notes]]
+    : [['Legal (AR)', v['Legal Name (AR)']], ['Company type', v['Company Type']], ['Owners', v['Owners / Shareholders']], ['Signatories', v.Signatories], ['Group', v['Group (management)']], ['CR expiry', v['CR Expiry (earliest)']], ['All numbers', v['All Numbers']], ['Previous reps', v['Previous Reps']], ['Old status', v['Old Status']], ['Branch CRs', v['Branch CRs']], ['Signed', fmt(v['Signed Date'])], ['Commission %', v['Commission %']]];
+  $('#vt').innerHTML = `<div class="card"><div class="kv">${kv.filter(x => x[1] && x[1] !== '—').map(x => `<div>${x[0]}</div><div>${esc(x[1])}</div>`).join('') || '<div class="mute">—</div>'}</div></div>`;
 }
 
 // ---------------------------------------------------------------------- branches
 function branchesTab() {
-  const v = S.vendor; const bl = v.branchList || []; const joining = bl.filter(b => b.include && !b.closed).length;
-  $('#vt').innerHTML = `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Branches <span class="pill">${joining} of ${bl.filter(b => !b.closed).length} joining</span></h2><button class="btn sm" onclick="branchForm()">+ Add branch</button></div>
+  const v = S.vendor; const bl = S.db.brOf[v.vid] || []; const open = bl.filter(b => !b.Closed); const joining = open.filter(b => b['Include in contract']).length;
+  $('#vt').innerHTML = `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Branches <span class="pill">${joining || open.length} of ${open.length} joining</span></h2><button class="btn sm" onclick="branchForm()">+ Add branch</button></div>
   <p class="mute" style="margin:6px 0 10px">Tick the branches joining the contract. None ticked = all open branches join. Pins are located automatically.</p>
-  ${bl.map(b => `<div class="branch ${b.closed ? 'closed' : ''}"><input type="checkbox" ${b.include ? 'checked' : ''} ${b.closed ? 'disabled' : ''} onchange="tickBranch(${b.row},this)">
-    <div class="grow"><div class="row" style="justify-content:space-between"><b>${esc(b.cr)}</b>${b.closed ? '<span class="pill grey">closed</span>' : geoPill(b.geo)}</div>
+  ${bl.map(b => `<div class="branch ${b.Closed ? 'closed' : ''}"><input type="checkbox" ${b['Include in contract'] ? 'checked' : ''} ${b.Closed ? 'disabled' : ''} onchange="tickBranch(${b.row},this)">
+    <div class="grow"><div class="row" style="justify-content:space-between"><b>${esc(b['Branch CR'])}</b>${b.Closed ? '<span class="pill grey">closed</span>' : geoPill(b['Geo confidence'])}</div>
     <div class="mute">${esc([b.Area, b.Shop && 'Shop ' + b.Shop, b.Bldg && 'Bldg ' + b.Bldg, b.Road && 'Rd ' + b.Road, b.Block && 'Blk ' + b.Block].filter(Boolean).join(', ') || 'no address')}</div>
     <div class="mute">${esc(b['Responsible Person'] || '—')} ${b['Branch Phone'] ? '· <a class="wa" href="https://wa.me/' + tel(b['Branch Phone']) + '" target="_blank">' + esc(b['Branch Phone']) + '</a>' : ''}</div>
-    ${b.matched ? `<div class="mute" style="font-size:12px">${esc(b.matched.slice(0, 110))} ${b.pin ? `<a href="${esc(b.pin)}" target="_blank">map</a>` : ''}</div>` : ''}
-    <div class="row" style="margin-top:6px"><button class="btn sm sec" onclick="branchForm(${b.row})">Edit</button><button class="btn sm sec" onclick="shiftsForm('${esc(b.cr)}')">Hours</button>${b.closed ? '' : `<button class="btn sm danger" onclick="closeBranch(${b.row})">Mark closed</button>`}</div></div></div>`).join('') || '<p class="mute">No branches — add the first one.</p>'}</div>`;
+    ${b['Matched as'] ? `<div class="mute" style="font-size:12px">${esc(String(b['Matched as']).slice(0, 110))} ${b['Confirm pin'] ? `<a href="${esc(b['Confirm pin'])}" target="_blank">map</a>` : ''}</div>` : ''}
+    <div class="row" style="margin-top:6px"><button class="btn sm sec" onclick="branchForm(${b.row})">Edit</button><button class="btn sm sec" onclick="shiftsForm('${esc(b['Branch CR'])}')">Hours</button>${b.Closed ? '' : `<button class="btn sm danger" onclick="closeBranch(${b.row})">Mark closed</button>`}</div></div></div>`).join('') || '<p class="mute">No branches — add the first one.</p>'}</div>`;
 }
-function branchOf(row) { return (S.vendor.branchList || []).find(b => b.row === row); }
-async function tickBranch(row, cb) { cb.disabled = true; try { const r = await api('saveBranch', { vid: S.vendor.vid, row: row, include: cb.checked }); if (r.geo && r.geo.confidence) toast('Pin: ' + r.geo.confidence); if (r.sync) toast(r.sync); const b = branchOf(row); if (b && r.branch) Object.assign(b, r.branch); branchesTab(); } catch (e) { toast(e.message, true); cb.checked = !cb.checked; cb.disabled = false; } }
+function branchOf(row) { return (S.db.brOf[S.vendor.vid] || []).find(b => b.row === row); }
+function mergeBranch(row, srv) {   // server branch object → snapshot branch
+  const map = { cr: 'Branch CR', include: 'Include in contract', closed: 'Closed', lat: 'Lat', lng: 'Lng', geo: 'Geo confidence', pin: 'Confirm pin', matched: 'Matched as', prev: 'Previous value', genRow: 'Generator row' };
+  const b = branchOf(row); if (!b || !srv) return; Object.keys(srv).forEach(k => { const key = map[k] || k; if (key in b || map[k]) b[key] = typeof srv[k] === 'boolean' ? (srv[k] ? 1 : 0) : srv[k]; });
+}
+async function tickBranch(row, cb) {
+  const on = cb.checked; remember(db => { const b = (db.brOf[S.vendor.vid] || []).find(x => x.row === row); if (b) b['Include in contract'] = on ? 1 : 0; }); branchesTab();
+  try { const r = await api('saveBranch', { vid: S.vendor.vid, row: row, include: on }); if (r.geo && r.geo.confidence) toast('Pin: ' + r.geo.confidence); if (r.sync) toast(r.sync); remember(db => {}); mergeBranch(row, r.branch); branchesTab(); }
+  catch (e) { toast(e.message, true); remember(db => { const b = (db.brOf[S.vendor.vid] || []).find(x => x.row === row); if (b) b['Include in contract'] = on ? 0 : 1; }); branchesTab(); }
+}
 function branchForm(row) {
-  const b = row ? branchOf(row) : {}; const root = S.vendor.root;
-  modal(`<h3>${row ? 'Edit branch' : 'Add branch'}</h3><label class="f req">Branch CR</label><div class="row"><span class="mute">${esc(root)}-</span><input id="b_cr" class="grow" inputmode="numeric" value="${esc((b.cr || '').split('-')[1] || '')}" placeholder="serial after the dash"></div>
+  const b = row ? branchOf(row) : {}; const root = S.vendor['Root CR'];
+  modal(`<h3>${row ? 'Edit branch' : 'Add branch'}</h3><label class="f req">Branch CR</label><div class="row"><span class="mute">${esc(root)}-</span><input id="b_cr" class="grow" inputmode="numeric" value="${esc(String(b['Branch CR'] || '').split('-')[1] || '')}" placeholder="serial after the dash"></div>
   <div class="grid2"><div><label class="f req">Area</label><input id="b_area" value="${esc(b.Area)}"></div><div><label class="f">Block</label><input id="b_block" inputmode="numeric" value="${esc(b.Block)}"></div></div>
   <div class="grid3"><div><label class="f">Shop</label><input id="b_shop" value="${esc(b.Shop)}"></div><div><label class="f">Building</label><input id="b_bldg" value="${esc(b.Bldg)}"></div><div><label class="f">Road</label><input id="b_road" value="${esc(b.Road)}"></div></div>
   <label class="f">Contact person at branch</label><input id="b_rp" value="${esc(b['Responsible Person'])}"><div class="grid2"><div><label class="f">Branch phone</label><input id="b_ph" type="tel" value="${esc(b['Branch Phone'])}"></div><div><label class="f">Email</label><input id="b_em" type="email" value="${esc(b.Email)}"></div></div>
-  ${b.prev ? `<p class="mute">Previous: ${esc(b.prev)}</p>` : ''}
+  ${b['Previous value'] ? `<p class="mute">Previous: ${esc(b['Previous value'])}</p>` : ''}
   <div class="row" style="margin-top:12px"><button class="btn grow" onclick="saveBranch(${row || 0},this)">Save & locate</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
 }
 async function saveBranch(row, btn) {
-  busy(btn, true);
-  const f = { 'Branch CR': S.vendor.root + '-' + $('#b_cr').value.trim(), 'Area': $('#b_area').value, 'Block': $('#b_block').value, 'Shop': $('#b_shop').value, 'Bldg': $('#b_bldg').value, 'Road': $('#b_road').value, 'Responsible Person': $('#b_rp').value, 'Branch Phone': $('#b_ph').value, 'Email': $('#b_em').value };
-  try { const r = await api('saveBranch', { vid: S.vendor.vid, row: row || undefined, fields: f, include: row ? undefined : true }); closeModal(); toast((r.geo ? 'Located: ' + r.geo.confidence : 'Saved') + (r.sync ? ' · ' + r.sync : '')); reloadVendor(); } catch (e) { toast(e.message, true); busy(btn, false); }
+  busy(btn, true); const v = S.vendor;
+  const f = { 'Branch CR': v['Root CR'] + '-' + $('#b_cr').value.trim(), 'Area': $('#b_area').value, 'Block': $('#b_block').value, 'Shop': $('#b_shop').value, 'Bldg': $('#b_bldg').value, 'Road': $('#b_road').value, 'Responsible Person': $('#b_rp').value, 'Branch Phone': $('#b_ph').value, 'Email': $('#b_em').value };
+  try { const r = await api('saveBranch', { vid: v.vid, row: row || undefined, fields: f, include: row ? undefined : true });
+    remember(db => { const list = db.brOf[v.vid] = db.brOf[v.vid] || []; let b = list.find(x => x.row === r.branch.row); if (!b) { b = { 'Vendor ID': v.vid, vid: v.vid, row: r.branch.row, 'Brand (Trade Name)': v['Brand (Trade Name)'] }; list.push(b); } Object.keys(f).forEach(k => b[k] = f[k]); const vv = db.byId[v.vid]; if (vv) { vv['Branch CRs'] = r.branchCRs; vv.Branches = list.filter(x => !x.Closed).length; } });
+    mergeBranch(r.branch.row, r.branch); closeModal(); toast((r.geo ? 'Located: ' + r.geo.confidence : 'Saved') + (r.sync ? ' · ' + r.sync : '')); render();
+  } catch (e) { toast(e.message, true); busy(btn, false); }
 }
-async function closeBranch(row) { if (!confirm('Mark this branch as closed? It leaves the contract.')) return; try { const r = await api('saveBranch', { vid: S.vendor.vid, row: row, closed: true }); toast('Closed' + (r.sync ? ' · ' + r.sync : '')); reloadVendor(); } catch (e) { toast(e.message, true); } }
-// hours / shifts
+async function closeBranch(row) {
+  if (!confirm('Mark this branch as closed? It leaves the contract.')) return;
+  remember(db => { const b = (db.brOf[S.vendor.vid] || []).find(x => x.row === row); if (b) { b.Closed = 1; b['Include in contract'] = 0; } }); branchesTab();
+  try { const r = await api('saveBranch', { vid: S.vendor.vid, row: row, closed: true }); toast('Closed' + (r.sync ? ' · ' + r.sync : '')); } catch (e) { toast(e.message, true); }
+}
+// hours / shifts (server only — not in the snapshot)
 async function shiftsForm(cr) {
   let rows = []; try { rows = (await api('shifts', { vid: S.vendor.vid, cr: cr })).shifts; } catch (e) {}
   if (!rows.length) rows = [{ days: [true, true, true, true, true, false, true], shift: '1', from: '09:00', to: '23:00' }];
   S.shiftRows = rows; S.shiftCR = cr;
   modal(`<h3>Opening hours · ${esc(cr)}</h3><div id="sh_rows"></div><button class="btn sm sec" onclick="S.shiftRows.push({days:[false,false,false,false,false,false,false],shift:'2',from:'',to:''});drawShifts()">+ Add shift row</button>
-  <label class="f" style="margin-top:12px"><input type="checkbox" id="sh_all"> Apply the same hours to all ${(S.vendor.branchList || []).filter(b => !b.closed).length} branches</label>
+  <label class="f" style="margin-top:12px"><input type="checkbox" id="sh_all"> Apply the same hours to all ${(S.db.brOf[S.vendor.vid] || []).filter(b => !b.Closed).length} branches</label>
   <div class="row" style="margin-top:12px"><button class="btn grow" onclick="saveShifts(this)">Save</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
   drawShifts();
 }
 function drawShifts() {
-  $('#sh_rows').innerHTML = S.shiftRows.map((r, i) => `<div class="card" style="padding:10px"><div class="days">${S.meta.days.map((d, k) => `<label class="${r.days[k] ? 'on' : ''}" onclick="S.shiftRows[${i}].days[${k}]=!S.shiftRows[${i}].days[${k}];drawShifts()">${d}</label>`).join('')}</div>
-  <div class="grid3" style="margin-top:8px"><div><label class="f">Shift</label><select onchange="S.shiftRows[${i}].shift=this.value;drawShifts()">${S.meta.shiftChoices.map(c => `<option ${r.shift === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+  $('#sh_rows').innerHTML = S.shiftRows.map((r, i) => `<div class="card" style="padding:10px"><div class="days">${M().days.map((d, k) => `<label class="${r.days[k] ? 'on' : ''}" onclick="S.shiftRows[${i}].days[${k}]=!S.shiftRows[${i}].days[${k}];drawShifts()">${d}</label>`).join('')}</div>
+  <div class="grid3" style="margin-top:8px"><div><label class="f">Shift</label><select onchange="S.shiftRows[${i}].shift=this.value;drawShifts()">${M().shiftChoices.map(c => `<option ${r.shift === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
   <div><label class="f">From</label><input type="time" step="1800" value="${esc(r.from)}" ${/Off|24h/.test(r.shift) ? 'disabled' : ''} onchange="S.shiftRows[${i}].from=this.value"></div><div><label class="f">To</label><input type="time" step="1800" value="${esc(r.to === '24:00' ? '23:59' : r.to)}" ${/Off|24h/.test(r.shift) ? 'disabled' : ''} onchange="S.shiftRows[${i}].to=this.value"></div></div>
   <div style="text-align:right;margin-top:6px"><button class="btn sm danger" onclick="S.shiftRows.splice(${i},1);drawShifts()">Remove</button></div></div>`).join('');
 }
 async function saveShifts(btn) {
   busy(btn, true); const rows = S.shiftRows.map(r => ({ days: r.days, shift: r.shift, from: r.from, to: r.to === '23:59' ? '24:00' : r.to }));
-  const crs = $('#sh_all').checked ? (S.vendor.branchList || []).filter(b => !b.closed).map(b => b.cr) : [S.shiftCR];
+  const crs = $('#sh_all').checked ? (S.db.brOf[S.vendor.vid] || []).filter(b => !b.Closed).map(b => b['Branch CR']) : [S.shiftCR];
   try { await api('saveShifts', { vid: S.vendor.vid, crs: crs, rows: rows }); closeModal(); toast('Hours saved for ' + crs.length + ' branch' + (crs.length === 1 ? '' : 'es')); } catch (e) { toast(e.message, true); busy(btn, false); }
 }
 
 // ---------------------------------------------------------------------- contract
 function contractTab() {
-  const v = S.vendor; const t = v.terms; const el = $('#vt');
-  if (!t) { el.innerHTML = `<div class="card"><h2>Contract</h2><p class="mute">Step 1 sends the vendor and the ticked branches to the contract generator and brings back the default rates. Step 2 lets you adjust terms and generate the agreement.</p>
-    <p class="mute">Joining now: <b>${(v.branchList || []).filter(b => b.include && !b.closed).length || (v.branchList || []).filter(b => !b.closed).length}</b> branch(es). Check the Branches tab first.</p>
-    <button class="btn" style="width:100%" onclick="pushContract(this)" ${v.canEdit ? '' : 'disabled'}>Send to contracts</button></div>`; return; }
-  if (!t.defaults && !t._loading) { t._loading = true; api('terms', { vid: v.vid }).then(r => { if (r.terms) { S.vendor.terms = r.terms; if (r.terms.categories && r.terms.categories.length) S.meta.categories = r.terms.categories; if (S.view === 'vendor' && S.vtab === 'contract') contractTab(); } }).catch(() => {}); }
+  const v = S.vendor; const t = S.vendor._terms || S.db.termOf[v.vid]; const el = $('#vt');
+  if (!t) { el.innerHTML = `<div class="card"><h2>Contract</h2><p class="mute">Step 1 sends the vendor and the ticked branches to the contract generator and brings back the default rates (takes ~10 s). Step 2 lets you adjust terms and generate the agreement.</p>
+    <p class="mute">Joining now: <b>${((S.db.brOf[v.vid] || []).filter(b => b['Include in contract'] && !b.Closed).length || (S.db.brOf[v.vid] || []).filter(b => !b.Closed).length)}</b> branch(es). Check the Branches tab first.</p>
+    <button class="btn" style="width:100%" onclick="pushContract(this)" ${canEdit(v) ? '' : 'disabled'}>Send to contracts</button></div>`; return; }
+  if (!t.defaults && !t._loading) { t._loading = true; api('terms', { vid: v.vid }).then(r => { if (r.terms) { S.vendor._terms = r.terms; if (r.terms.categories) S.categories = r.terms.categories; if (S.view === 'vendor' && S.vtab === 'contract') contractTab(); } }).catch(() => { t._loading = false; }); }
   const gen = t.generatorStatus || ''; const locked = /Issued|Signed/.test(gen);
   el.innerHTML = `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Contract terms</h2><span class="pill ${locked ? 'ok' : 'gold'}">${esc(gen || 'Draft')}</span></div>
-    <p class="mute" style="margin:6px 0 10px">${esc(t['Generation status'] || '')}</p>
+    <p class="mute" style="margin:6px 0 10px">${esc(t['Generation status'] || '')}${t.defaults ? '' : ' · loading defaults…'}</p>
     ${t['Agreement PDF'] ? `<div class="row" style="margin-bottom:10px"><a class="btn sm" href="${esc(t['Agreement PDF'])}">⬇ Agreement PDF</a>${t['Branch Schedule PDF'] ? `<a class="btn sm sec" href="${esc(t['Branch Schedule PDF'])}">⬇ Branch schedule PDF</a>` : ''}${t['Contract Folder'] ? `<a class="btn sm sec" href="${esc(t['Contract Folder'])}" target="_blank">Folder</a>` : ''}</div>` : ''}
     <div class="row" style="margin-bottom:8px"><button class="btn sm sec" onclick="pushContract(this)" ${locked ? 'disabled' : ''}>Re-send branches</button><span class="mute">(after ticking / editing branches)</span></div>
-    <div class="grid2d">${S.meta.termsCols.map(c => termField(c, t)).join('')}</div>
+    <div class="grid2d">${M().termsCols.map(c => termField(c, t)).join('')}</div>
     <div class="row" style="margin-top:14px"><button class="btn sec grow" onclick="saveTerms(this)" ${locked ? 'disabled' : ''}>Save terms</button><button class="btn gold grow" onclick="generateNow(this)" ${locked ? 'disabled' : ''}>Save & generate agreement</button></div>
     <p class="mute" style="margin-top:8px">Blank = the standard rate from the fee document (shown underneath). Type a value only when something different was agreed with the vendor.</p></div>`;
 }
 function termField(c, t) {
   const id = 'tf_' + c.h.replace(/[^a-z0-9]/gi, '_'); const v = t[c.h]; const def = t.defaults && t.defaults[c.h];
-  if (c.yn) return `<label class="f" style="display:flex;align-items:center;gap:8px;margin-top:12px"><input type="checkbox" id="${id}" data-h="${esc(c.h)}" ${v === true ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--green)"> ${esc(c.h)}</label>`;
+  if (c.yn) return `<label class="f" style="display:flex;align-items:center;gap:8px;margin-top:12px"><input type="checkbox" id="${id}" data-h="${esc(c.h)}" ${v === true || v === 1 ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--green)"> ${esc(c.h)}</label>`;
   if (c.list) return `<div><label class="f">${esc(c.h)}</label><select id="${id}" data-h="${esc(c.h)}"><option value="">—</option>${c.list.map(o => `<option ${v === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></div>`;
-  if (c.h === 'Category') return `<div><label class="f">Category</label><select id="${id}" data-h="Category"><option value="">—</option>${S.meta.categories.map(o => `<option ${v === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></div>`;
+  if (c.h === 'Category') { const cats = S.categories || (v ? [v] : []); return `<div><label class="f">Category</label><select id="${id}" data-h="Category"><option value="">—</option>${cats.map(o => `<option ${v === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></div>`; }
   if (c.date) return `<div><label class="f req">${esc(c.h)}</label><input type="date" id="${id}" data-h="${esc(c.h)}" value="${esc(v || '')}"></div>`;
   const req = /Signatory$|IBAN|Bank Name|Legal Business/.test(c.h) ? ' req' : '';
   return `<div><label class="f${req}">${esc(c.h)}</label><input id="${id}" data-h="${esc(c.h)}" class="${c.rate ? 'rate' : ''}" value="${esc(v == null ? '' : v)}" ${c.h === 'Legal Business Name' ? 'readonly' : ''} placeholder="${def ? 'default: ' + esc(def) : ''}">${def ? `<div class="def">Default: ${esc(def)}</div>` : ''}</div>`;
 }
 function collectTerms() { const f = {}; document.querySelectorAll('[data-h]').forEach(el => { f[el.dataset.h] = el.type === 'checkbox' ? el.checked : el.value; }); return f; }
-async function pushContract(btn) { busy(btn, true); try { const r = await api('push', { vid: S.vendor.vid }); toast(r.message.slice(0, 120)); await reloadVendor(); S.vtab = 'contract'; render(); } catch (e) { toast(e.message, true); busy(btn, false); } }
-async function saveTerms(btn) { busy(btn, true); try { await api('saveTerms', { vid: S.vendor.vid, fields: collectTerms() }); toast('Terms saved'); await reloadVendor(); } catch (e) { toast(e.message, true); busy(btn, false); } }
-async function generateNow(btn) { busy(btn, true); try { await api('saveTerms', { vid: S.vendor.vid, fields: collectTerms() }); const r = await api('generate', { vid: S.vendor.vid }); toast(r.message, /Not generated|refused|Already/.test(r.message)); await reloadVendor(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+async function pushContract(btn) { busy(btn, true); try { const r = await api('push', { vid: S.vendor.vid }); toast(r.message.slice(0, 120)); S.vendor._terms = r.terms; remember(db => { const vv = db.byId[S.vendor.vid]; if (vv) { vv['Contract sync'] = r.message; if (!/Signed|Onboarded/.test(vv.Status)) vv.Status = 'Contract sent'; vv['Contract Sent'] = 'Yes'; } if (r.terms) db.termOf[S.vendor.vid] = r.terms; }); S.vtab = 'contract'; render(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+async function saveTerms(btn) { busy(btn, true); try { const r = await api('saveTerms', { vid: S.vendor.vid, fields: collectTerms() }); S.vendor._terms = r.terms; remember(db => { db.termOf[S.vendor.vid] = r.terms; }); toast('Terms saved'); contractTab(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+async function generateNow(btn) { busy(btn, true); try { await api('saveTerms', { vid: S.vendor.vid, fields: collectTerms() }); const r = await api('generate', { vid: S.vendor.vid }); S.vendor._terms = r.terms; remember(db => { db.termOf[S.vendor.vid] = r.terms; }); toast(r.message, /Not generated|refused|Already/.test(r.message)); contractTab(); } catch (e) { toast(e.message, true); busy(btn, false); } }
 
-// ====================================================================== manager dashboard
+// ====================================================================== manager: approvals
+function approvalsView() {
+  const list = S.db.pending.slice().sort((a, c) => (a.Status === 'Pending' ? 0 : 1) - (c.Status === 'Pending' ? 0 : 1) || (c.Submitted > a.Submitted ? 1 : -1));
+  $('#main').innerHTML = `<div class="card"><h2>New vendors submitted by reps</h2><p class="mute">Check the CR on Sijilat, correct anything, then approve — the vendor and its first branch go into the pipeline assigned to the rep. Reject with a reason the rep will see.</p>
+  <div class="list">${list.map(p => `<a class="item" onclick="reviewForm('${esc(p['Pending ID'])}')"><div class="t"><span>${esc(p['Brand (Trade Name)'])} · ${esc(p['Root CR'])}</span>${statusPill(p.Status === 'Pending' ? 'Pending approval' : p.Status)}</div><div class="s"><span>${esc(p.Rep)} · ${fmt(p.Submitted)}</span><span>${esc(p.Segment)} · ${esc(p['Main Area'])}</span>${p.Reason ? '<span>' + esc(p.Reason) + '</span>' : ''}</div></a>`).join('') || '<p class="mute">Nothing waiting.</p>'}</div></div>`;
+}
+function reviewForm(id) {
+  const p = S.db.pending.find(x => x['Pending ID'] === id); if (!p) return; const dis = p.Status !== 'Pending';
+  const F = (k, label, type) => `<div><label class="f">${label}</label><input data-k="${esc(k)}" ${type ? 'type="' + type + '"' : ''} value="${esc(p[k])}" ${dis ? 'readonly' : ''}></div>`;
+  modal(`<h3>${esc(p['Brand (Trade Name)'])} · CR ${esc(p['Root CR'])}</h3><p class="mute">Submitted by ${esc(p.Rep)} on ${fmt(p.Submitted)}${dis ? ' · ' + esc(p.Status) + ' by ' + esc(p['Reviewed by']) : ''}</p>
+  <a class="btn sm sec" target="_blank" href="https://www.sijilat.bh/">Open Sijilat</a>
+  <div class="grid2">${F('Root CR', 'Root CR')}${F('Brand (Trade Name)', 'Brand')}</div>${F('Legal Name (EN)', 'Legal name')}
+  <div class="grid2">${F('Segment', 'Segment')}${F('Main Area', 'Main area')}${F('Decision Maker', 'Decision maker')}${F('Best Number', 'Best number', 'tel')}</div>${F('Email', 'Email', 'email')}
+  <h3 style="font-size:15px;margin-top:12px">First branch</h3><div class="grid2">${F('Branch CR', 'Branch CR')}${F('Branch Area', 'Area')}</div>
+  <div class="grid4" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">${F('Shop', 'Shop')}${F('Bldg', 'Bldg')}${F('Road', 'Road')}${F('Block', 'Block')}</div>
+  <div class="grid2">${F('Responsible Person', 'Contact')}${F('Branch Phone', 'Phone', 'tel')}</div>${F('Notes', 'Notes')}
+  ${dis ? '' : `<label class="f">Reason (for rejection)</label><input id="rv_reason"><div class="row" style="margin-top:12px"><button class="btn grow" onclick="reviewSave('${esc(id)}',true,this)">Approve</button><button class="btn danger" onclick="reviewSave('${esc(id)}',false,this)">Reject</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`}`);
+}
+async function reviewSave(id, approve, btn) {
+  const edits = {}; document.querySelectorAll('#modal [data-k]').forEach(el => edits[el.dataset.k] = el.value); const reason = ($('#rv_reason') || {}).value || '';
+  if (!approve && !reason) { toast('Give the rep a reason', true); return; }
+  busy(btn, true);
+  try { const r = await api('reviewVendor', { id: id, approve: approve, edits: edits, reason: reason });
+    remember(db => { const p = db.pending.find(x => x['Pending ID'] === id); if (!p) return; Object.assign(p, edits); p.Status = approve ? 'Approved' : 'Rejected'; p['Reviewed by'] = S.user.name; p.Reason = reason;
+      if (approve && !db.byId[p.vid]) { const v = { 'Vendor ID': p.vid, vid: p.vid, 'Root CR': p['Root CR'], 'Brand (Trade Name)': p['Brand (Trade Name)'], 'Legal Name (EN)': p['Legal Name (EN)'] || p['Brand (Trade Name)'], 'Branch CRs': p['Branch CR'], Branches: 1, Segment: p.Segment, Tier: 'Tier 3 – Single outlet', 'Decision Maker': p['Decision Maker'], 'Best Number': p['Best Number'], Email: p.Email, 'Main Area': p['Main Area'], 'Assigned To': p.Rep, Status: 'New', 'Notes (short)': p.Notes, pending: false, row: 0 }; db.vendors.push(v); db.byId[p.vid] = v;
+        db.brOf[p.vid] = [{ 'Vendor ID': p.vid, vid: p.vid, 'Branch CR': p['Branch CR'], 'Brand (Trade Name)': p['Brand (Trade Name)'], 'Responsible Person': p['Responsible Person'], 'Branch Phone': p['Branch Phone'], Area: p['Branch Area'], Shop: p.Shop, Bldg: p.Bldg, Road: p.Road, Block: p.Block, 'Include in contract': 1, Closed: 0, row: 0 }]; } });
+    closeModal(); toast(approve ? 'Approved — now in the pipeline' : 'Rejected'); render();
+  } catch (e) { toast(e.message, true); busy(btn, false); }
+}
+
+// ====================================================================== manager dashboard (computed from the snapshot)
 function periodRange(p) {
   const d = new Date(); const iso = x => x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0');
   const dow = (d.getDay() + 1) % 7;  // week starts Saturday
@@ -339,62 +502,73 @@ function periodRange(p) {
   else if (p === 'custom') { return { from: S.from || iso(a), to: S.to || iso(b) }; }
   return { from: iso(a), to: iso(b) };
 }
-async function dashView() {
+function computeDash(from, to, rep) {
+  const db = S.db; const today = todayISO(); const inR = d => d && d >= from && d <= to; const repOk = n => !rep || inTeam(n, rep);
+  const byDay = {}, byRep = {}, byOutcome = {}, funnel = {}, perRep = {}; let unassigned = 0, signedVendors = 0, signedInRange = 0, contractSentNow = 0, dueToday = 0, overdue = 0;
+  db.activities.forEach(a => { const d = String(a.Date).slice(0, 10); if (!inR(d) || !repOk(a.Salesperson)) return; const kind = /visit/i.test(a.Activity) ? 'visits' : /meeting/i.test(a.Activity) ? 'meetings' : /call|whatsapp|phone/i.test(a.Activity) ? 'calls' : 'other';
+    byDay[d] = byDay[d] || { calls: 0, visits: 0, meetings: 0, other: 0, total: 0 }; byDay[d][kind]++; byDay[d].total++;
+    const w = a.Salesperson || '—'; byRep[w] = byRep[w] || { calls: 0, visits: 0, meetings: 0, other: 0, total: 0 }; byRep[w][kind]++; byRep[w].total++; const o = a.Outcome || '—'; byOutcome[o] = (byOutcome[o] || 0) + 1; });
+  db.vendors.forEach(v => { const asg = v['Assigned To'] || ''; const st = v.Status || 'New'; if (!asg) unassigned++; if (!repOk(asg)) return; funnel[st] = (funnel[st] || 0) + 1;
+    asg.split('+').map(s => s.trim()).filter(Boolean).forEach(n => { perRep[n] = perRep[n] || { vendors: 0, signed: 0, contractSent: 0, overdue: 0 }; perRep[n].vendors++; if (/Signed|Onboarded/.test(st)) perRep[n].signed++; if (st === 'Contract sent') perRep[n].contractSent++; });
+    if (/Signed|Onboarded/.test(st)) { signedVendors++; if (inR(String(v['Signed Date']).slice(0, 10))) signedInRange++; } if (st === 'Contract sent') contractSentNow++;
+    const nd = v['Next Follow-up (auto)']; if (nd && CLOSED.indexOf(st) < 0) { if (nd < today) { overdue++; asg.split('+').map(s => s.trim()).filter(Boolean).forEach(n => { perRep[n] = perRep[n] || { vendors: 0, signed: 0, contractSent: 0, overdue: 0 }; perRep[n].overdue++; }); } else if (nd === today) dueToday++; } });
+  let branchesSigned = 0, branchesJoining = 0; db.branches.forEach(b => { if (!repOk(b['Assigned To (auto)'])) return; if (/Signed|Onboarded/.test(b['Vendor Status (auto)'])) branchesSigned++; if (b['Include in contract'] && !b.Closed) branchesJoining++; });
+  const days = []; for (let d = new Date(from); d <= new Date(to); d.setDate(d.getDate() + 1)) { const k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); days.push(Object.assign({ day: k }, byDay[k] || { calls: 0, visits: 0, meetings: 0, other: 0, total: 0 })); }
+  return { days, byRep, byOutcome, funnel, perRep, tiles: { activities: days.reduce((s, x) => s + x.total, 0), visits: days.reduce((s, x) => s + x.visits, 0), signedInRange, signedVendors, branchesSigned, branchesJoining, contractSentNow, overdue, dueToday, unassigned, pending: pendingCount() } };
+}
+function dashView() {
   const m = $('#main'); const P = [['today', 'Today'], ['week', 'This week'], ['lastweek', 'Last week'], ['month', 'This month'], ['lastmonth', 'Last month'], ['quarter', 'Quarter'], ['year', 'Year'], ['custom', 'Custom']];
-  const r = periodRange(S.period);
+  const r = periodRange(S.period); const d = computeDash(r.from, r.to, S.drep); const T = d.tiles;
   m.innerHTML = `<div class="card"><div class="seg">${P.map(p => `<button class="${S.period === p[0] ? 'on' : ''}" onclick="S.period='${p[0]}';dashView()">${p[1]}</button>`).join('')}</div>
     <div class="row" style="margin-top:8px"><input type="date" style="width:auto" value="${r.from}" onchange="S.from=this.value;S.period='custom';dashView()"><span class="mute">to</span><input type="date" style="width:auto" value="${r.to}" onchange="S.to=this.value;S.period='custom';dashView()">
-    <select style="width:auto" onchange="S.drep=this.value;dashView()"><option value="">All reps</option>${S.meta.reps.map(x => `<option ${S.drep === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select><button class="btn sm sec" onclick="syncNow(this)">Sync contracts</button></div></div>
-    <div id="dash"><p class="mute">Loading…</p></div>`;
-  try {
-    const d = await api('dashboard', { from: r.from, to: r.to, rep: S.drep }); S.dash = d; const T = d.tiles; const el = $('#dash'); if (!el) return;
-    el.innerHTML = `<div class="tiles">${[['activities', 'Activities'], ['visits', 'Visits'], ['signedInRange', 'Signed in period'], ['branchesSigned', 'Branches signed (now)'], ['contractSentNow', 'Contracts out'], ['overdue', 'Overdue follow-ups', 'warn'], ['dueToday', 'Due today'], ['signedVendors', 'Signed vendors (total)'], ['branchesJoining', 'Branches ticked to join'], ['unassigned', 'Unassigned vendors']].map(t => `<div class="tile ${t[2] && T[t[0]] ? 'warn' : ''}"><div class="n">${T[t[0]]}</div><div class="l">${t[1]}</div></div>`).join('')}</div>
+    <select style="width:auto" onchange="S.drep=this.value;dashView()"><option value="">All reps</option>${M().reps.map(x => `<option ${S.drep === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select><button class="btn sm sec" onclick="syncNow(this)">Sync contracts</button><button class="btn sm sec" onclick="publishNow(this)">Refresh data</button></div></div>
+    <div class="tiles">${[['activities', 'Activities'], ['visits', 'Visits'], ['signedInRange', 'Signed in period'], ['branchesSigned', 'Branches signed (now)'], ['contractSentNow', 'Contracts out'], ['overdue', 'Overdue follow-ups', 'warn'], ['dueToday', 'Due today'], ['signedVendors', 'Signed vendors (total)'], ['branchesJoining', 'Branches ticked to join'], ['unassigned', 'Unassigned vendors'], ['pending', 'Awaiting approval', 'warn']].map(t => `<div class="tile ${t[2] && T[t[0]] ? 'warn' : ''}"><div class="n">${T[t[0]]}</div><div class="l">${t[1]}</div></div>`).join('')}</div>
     <div class="grid2d" style="margin-top:12px"><div class="card"><h2>Activity per day</h2><div class="chart"><canvas id="c1"></canvas></div></div><div class="card"><h2>Activity by rep</h2><div class="chart"><canvas id="c2"></canvas></div></div>
     <div class="card"><h2>Pipeline (current statuses)</h2><div class="chart"><canvas id="c3"></canvas></div></div><div class="card"><h2>Outcomes in period</h2><div class="chart"><canvas id="c4"></canvas></div></div></div>
-    <div class="card"><h2>Reps</h2><table class="tb"><tr><th>Rep</th><th>Vendors</th><th>Activities</th><th>Visits</th><th>Contracts out</th><th>Signed</th><th>Overdue</th></tr>${Object.keys(d.perRep).sort().map(n => { const a = d.byRep[n] || { total: 0, visits: 0 }; const p = d.perRep[n]; return `<tr><td>${esc(n)}</td><td>${p.vendors}</td><td>${a.total}</td><td>${a.visits}</td><td>${p.contractSent}</td><td>${p.signed}</td><td class="${p.overdue ? 'pill red' : ''}">${p.overdue}</td></tr>`; }).join('')}</table></div>`;
-    drawCharts(d);
-  } catch (e) { toast(e.message, true); }
+    <div class="card"><h2>Reps</h2><table class="tb"><tr><th>Rep</th><th>Vendors</th><th>Activities</th><th>Visits</th><th>Contracts out</th><th>Signed</th><th>Overdue</th></tr>${Object.keys(d.perRep).sort().map(n => { const a = d.byRep[n] || { total: 0, visits: 0 }; const p = d.perRep[n]; return `<tr><td>${esc(n)}</td><td>${p.vendors}</td><td>${a.total}</td><td>${a.visits}</td><td>${p.contractSent}</td><td>${p.signed}</td><td><span class="${p.overdue ? 'pill red' : ''}">${p.overdue}</span></td></tr>`; }).join('')}</table></div>`;
+  drawCharts(d);
 }
 function drawCharts(d) {
+  if (typeof Chart === 'undefined') return;
   Object.values(S.charts).forEach(c => c.destroy()); S.charts = {};
   const G = '#1D6A33', GOLD = '#CAA34D', L = '#8CC5A0', GR = '#9CA3AF'; const base = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 11 } } } } };
   const lab = d.days.map(x => x.day.slice(5).split('-').reverse().join('/'));
   S.charts.c1 = new Chart($('#c1'), { type: 'bar', data: { labels: lab, datasets: [{ label: 'Calls', data: d.days.map(x => x.calls), backgroundColor: G }, { label: 'Visits', data: d.days.map(x => x.visits), backgroundColor: GOLD }, { label: 'Meetings', data: d.days.map(x => x.meetings), backgroundColor: L }, { label: 'Other', data: d.days.map(x => x.other), backgroundColor: GR }] }, options: Object.assign({}, base, { scales: { x: { stacked: true, ticks: { maxTicksLimit: 12 } }, y: { stacked: true, beginAtZero: true } } }) });
   const reps = Object.keys(d.byRep).sort();
   S.charts.c2 = new Chart($('#c2'), { type: 'bar', data: { labels: reps, datasets: [{ label: 'Calls', data: reps.map(n => d.byRep[n].calls), backgroundColor: G }, { label: 'Visits', data: reps.map(n => d.byRep[n].visits), backgroundColor: GOLD }, { label: 'Meetings', data: reps.map(n => d.byRep[n].meetings), backgroundColor: L }] }, options: Object.assign({}, base, { scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }) });
-  const order = S.meta.statuses.filter(s => d.funnel[s]); const rest = Object.keys(d.funnel).filter(s => order.indexOf(s) < 0);
-  const fl = order.concat(rest);
+  const order = M().statuses.filter(s => d.funnel[s]); const rest = Object.keys(d.funnel).filter(s => order.indexOf(s) < 0); const fl = order.concat(rest);
   S.charts.c3 = new Chart($('#c3'), { type: 'bar', data: { labels: fl, datasets: [{ label: 'Vendors', data: fl.map(s => d.funnel[s]), backgroundColor: fl.map(s => /Signed|Onboarded/.test(s) ? GOLD : /Not|Closed|Wrong|Duplicate/.test(s) ? GR : G) }] }, options: Object.assign({}, base, { indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true } } }) });
   const oc = Object.keys(d.byOutcome).sort((a, b) => d.byOutcome[b] - d.byOutcome[a]).slice(0, 8);
   S.charts.c4 = new Chart($('#c4'), { type: 'doughnut', data: { labels: oc, datasets: [{ data: oc.map(k => d.byOutcome[k]), backgroundColor: [G, GOLD, L, '#3F7D5A', '#E3C98A', GR, '#5B8F72', '#D9D9D9'] }] }, options: base });
 }
-async function syncNow(btn) { busy(btn, true); try { await api('sync'); toast('Contract statuses synced'); dashView(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+async function syncNow(btn) { busy(btn, true); try { await api('sync'); toast('Contract statuses synced — data refreshes within a minute'); } catch (e) { toast(e.message, true); } busy(btn, false); }
+async function publishNow(btn) { busy(btn, true); try { const r = await api('publish'); toast(r.message.slice(0, 80)); await loadDB(true); } catch (e) { toast(e.message, true); } busy(btn, false); }
 
-// ====================================================================== manager pin queue
-async function pinsView() {
-  const m = $('#main'); m.innerHTML = `<div class="card"><h2>Branches needing a pin check</h2><p class="mute">Only branches ticked to join a contract whose automatic location is Medium, Low, Review or Not found. Drag the pin to the right spot and save; or accept the address pin.</p><div id="pq" class="list"><p class="mute">Loading…</p></div></div><div class="card hide" id="pm"><div id="pmh"></div><div id="map"></div><div class="row" style="margin-top:10px"><button class="btn grow" onclick="savePin(this)">Save pin here</button><button class="btn sec" id="altBtn" onclick="useAlt()">Use address pin</button><button class="btn sec" onclick="relocate(this)">Re-run lookup</button></div></div>`;
-  try { const r = await api('geoQueue'); S.queue = r.queue; const el = $('#pq'); if (!el) return;
-    el.innerHTML = r.queue.length ? r.queue.map((q, i) => `<a class="item" onclick="pickPin(${i})"><div class="t"><span>${esc(q.brand)} · ${esc(q.cr)}</span>${geoPill(q.geo)}</div><div class="s"><span>${esc(q.area)} ${esc(q.address)}</span><span>${esc(q.assigned)}</span></div><div class="mute" style="font-size:12px">${esc(q.matched.slice(0, 140))}</div></a>`).join('') : '<p class="mute">Queue is empty — every joining branch has a trusted pin.</p>';
-  } catch (e) { toast(e.message, true); }
+// ====================================================================== manager pin queue (from the snapshot)
+function pinsView() {
+  const queue = S.db.branches.filter(b => b['Include in contract'] && !b.Closed && ['Verified', 'High', 'High (name only)', 'Manual pin'].indexOf(b['Geo confidence']) < 0).map(b => { const m = String(b['Matched as'] || '').match(/maps\?q=(-?\d+\.\d+),(-?\d+\.\d+)/); const v = S.db.byId[b.vid] || {}; return Object.assign({ brand: b['Brand (Trade Name)'] || v['Brand (Trade Name)'], legal: v['Legal Name (EN)'], alt: m ? { lat: Number(m[1]), lng: Number(m[2]) } : null, address: ['Shop', 'Bldg', 'Road', 'Block'].map(k => b[k] ? k + ' ' + b[k] : '').filter(Boolean).join(', ') }, b); });
+  S.queue = queue;
+  $('#main').innerHTML = `<div class="card"><h2>Branches needing a pin check <span class="pill ${queue.length ? 'red' : 'ok'}">${queue.length}</span></h2><p class="mute">Only branches ticked to join a contract whose automatic location is Medium, Low, Review or Not found. Drag the pin to the right spot and save; or accept the address pin.</p><div id="pq" class="list">${queue.map((q, i) => `<a class="item" onclick="pickPin(${i})"><div class="t"><span>${esc(q.brand)} · ${esc(q['Branch CR'])}</span>${geoPill(q['Geo confidence'] || 'Not located')}</div><div class="s"><span>${esc(q.Area)} ${esc(q.address)}</span><span>${esc(q['Assigned To (auto)'])}</span></div><div class="mute" style="font-size:12px">${esc(String(q['Matched as'] || '').slice(0, 140))}</div></a>`).join('') || '<p class="mute">Queue is empty — every joining branch has a trusted pin.</p>'}</div></div>
+  <div class="card hide" id="pm"><div id="pmh"></div><div id="map"></div><div class="row" style="margin-top:10px"><button class="btn grow" onclick="savePin(this)">Save pin here</button><button class="btn sec" id="altBtn" onclick="useAlt()">Use address pin</button><button class="btn sec" onclick="relocate(this)">Re-run lookup</button></div></div>`;
 }
 function pickPin(i) {
-  const q = S.queue[i]; S.pin = q; $('#pm').classList.remove('hide'); $('#pmh').innerHTML = `<b>${esc(q.brand)} · ${esc(q.cr)}</b><div class="mute">${esc(q.legal)} · ${esc(q.area)} ${esc(q.address)}</div><div class="mute" style="font-size:12px">${esc(q.matched)}</div>`;
-  const lat = Number(q.lat) || 26.2235, lng = Number(q.lng) || 50.5876;
+  const q = S.queue[i]; S.pin = q; $('#pm').classList.remove('hide'); $('#pmh').innerHTML = `<b>${esc(q.brand)} · ${esc(q['Branch CR'])}</b><div class="mute">${esc(q.legal)} · ${esc(q.Area)} ${esc(q.address)}</div><div class="mute" style="font-size:12px">${esc(q['Matched as'])}</div>`;
+  const lat = Number(q.Lat) || 26.2235, lng = Number(q.Lng) || 50.5876;
+  if (typeof L === 'undefined') { toast('Map library not loaded', true); return; }
   if (!S.map) { S.map = L.map('map'); L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(S.map); }
   if (S.marker) S.marker.remove(); if (S.alt) { S.alt.remove(); S.alt = null; }
   S.marker = L.marker([lat, lng], { draggable: true }).addTo(S.map).bindPopup('Drag me to the shop').openPopup();
-  if (q.alt) { S.alt = L.circleMarker([q.alt.lat, q.alt.lng], { radius: 8, color: '#CAA34D' }).addTo(S.map).bindPopup('Address pin'); S.map.fitBounds([[lat, lng], [q.alt.lat, q.alt.lng]], { padding: [30, 30] }); } else S.map.setView([lat, lng], q.lat ? 17 : 11);
+  if (q.alt) { S.alt = L.circleMarker([q.alt.lat, q.alt.lng], { radius: 8, color: '#CAA34D' }).addTo(S.map).bindPopup('Address pin'); S.map.fitBounds([[lat, lng], [q.alt.lat, q.alt.lng]], { padding: [30, 30] }); } else S.map.setView([lat, lng], q.Lat ? 17 : 11);
   $('#altBtn').classList.toggle('hide', !q.alt); setTimeout(() => S.map.invalidateSize(), 50); $('#pm').scrollIntoView({ behavior: 'smooth' });
 }
 function useAlt() { if (S.pin && S.pin.alt) S.marker.setLatLng([S.pin.alt.lat, S.pin.alt.lng]); }
-async function savePin(btn) { busy(btn, true); const p = S.marker.getLatLng(); try { const r = await api('setPin', { row: S.pin.row, lat: +p.lat.toFixed(6), lng: +p.lng.toFixed(6) }); toast('Pin saved' + (r.sync ? ' · ' + r.sync : '')); pinsView(); } catch (e) { toast(e.message, true); busy(btn, false); } }
-async function relocate(btn) { busy(btn, true); try { const r = await api('geocode', { row: S.pin.row, force: true }); toast('Lookup: ' + r.geo.confidence); pinsView(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+async function savePin(btn) { busy(btn, true); const p = S.marker.getLatLng(); const q = S.pin; try { const r = await api('setPin', { row: q.row, lat: +p.lat.toFixed(6), lng: +p.lng.toFixed(6) }); remember(db => { const b = db.branches.find(x => x.row === q.row); if (b) { b.Lat = +p.lat.toFixed(6); b.Lng = +p.lng.toFixed(6); b['Geo confidence'] = 'Manual pin'; b['Matched as'] = 'Pin set by ' + S.user.name; } }); S.map = null; toast('Pin saved' + (r.sync ? ' · ' + r.sync : '')); pinsView(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+async function relocate(btn) { busy(btn, true); const q = S.pin; try { const r = await api('geocode', { row: q.row, force: true }); remember(db => { const b = db.branches.find(x => x.row === q.row); if (b) { b.Lat = r.geo.lat; b.Lng = r.geo.lng; b['Geo confidence'] = r.geo.confidence; b['Matched as'] = r.geo.matched; } }); S.map = null; toast('Lookup: ' + r.geo.confidence); pinsView(); } catch (e) { toast(e.message, true); busy(btn, false); } }
 
-// ====================================================================== modal
+// ====================================================================== modal + boot
 function modal(html) { closeModal(); const d = document.createElement('div'); d.className = 'modal'; d.id = 'modal'; d.innerHTML = '<div class="box">' + html + '</div>'; d.addEventListener('click', e => { if (e.target === d) closeModal(); }); document.body.appendChild(d); }
 function closeModal() { const d = $('#modal'); if (d) d.remove(); }
-
-render(); if (!S.token) loadReps();
+render(); loadDB().then(() => { if (!S.token) loadReps(); }); if (!S.token) loadReps();
 </script>
 </body>
 </html>
