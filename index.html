@@ -539,7 +539,7 @@ function drawCharts(d) {
   const order = M().statuses.filter(s => d.funnel[s]); const rest = Object.keys(d.funnel).filter(s => order.indexOf(s) < 0); const fl = order.concat(rest);
   S.charts.c3 = new Chart($('#c3'), { type: 'bar', data: { labels: fl, datasets: [{ label: 'Vendors', data: fl.map(s => d.funnel[s]), backgroundColor: fl.map(s => /Signed|Onboarded/.test(s) ? GOLD : /Not|Closed|Wrong|Duplicate/.test(s) ? GR : G) }] }, options: Object.assign({}, base, { indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true } } }) });
   const oc = Object.keys(d.byOutcome).sort((a, b) => d.byOutcome[b] - d.byOutcome[a]).slice(0, 8);
-  S.charts.c4 = new Chart($('#c4'), { type: 'doughnut', data: { labels: oc, datasets: [{ data: oc.map(k => d.byOutcome[k]), backgroundColor: [G, GOLD, L, '#3F7D5A', '#E3C98A', GR, '#5B8F72', '#D9D9D9'] }] }, options: base });
+  S.charts.c4 = new Chart($('#c4'), { type: 'doughnut', data: { labels: oc, datasets: [{ data: oc.map(k => d.byOutcome[k]), backgroundColor: ['#1D6A33', '#CAA34D', '#2F6FB2', '#B42318', '#7A4FBF', '#E07B16', '#17A2B8', '#6B7280'] }] }, options: base });
 }
 async function syncNow(btn) { busy(btn, true); try { await api('sync'); toast('Contract statuses synced — data refreshes within a minute'); } catch (e) { toast(e.message, true); } busy(btn, false); }
 async function publishNow(btn) { busy(btn, true); try { const r = await api('publish'); toast(r.message.slice(0, 80)); await loadDB(true); } catch (e) { toast(e.message, true); } busy(btn, false); }
