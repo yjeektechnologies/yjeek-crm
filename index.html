@@ -277,7 +277,7 @@ function addVendorCheck() {
   if (pend) { closeModal(); openVendor(pend.vid); toast('Already submitted by ' + pend.Rep + ' — waiting for approval'); return; }
   $('#av_res').innerHTML = `<p class="pill ok" style="margin:10px 0">Not in the pipeline — fill in the details</p>
     <label class="f req">Brand / trade name</label><input id="av_brand"><label class="f">Legal name (as on CR)</label><input id="av_legal">
-    <div class="grid2"><div><label class="f req">Segment</label><select id="av_seg">${['Restaurant', 'Cafe', 'Bakery / Sweets', 'Catering', 'Supermarket', 'Pharmacy', 'Flowers & Gifts', 'Electronics', 'Perfume', 'Cosmetics', 'Clothing', 'Salon', 'Spa', 'Cleaning', 'Other'].map(s => `<option>${s}</option>`).join('')}</select><input id="av_seg_other" placeholder="Specify the new type" class="hide" style="margin-top:6px"></div><div><label class="f req">Main area</label><input id="av_area"></div></div>
+    <div class="grid2"><div><label class="f req">Segment</label><select id="av_seg">${['Restaurant', 'Cafe', 'Bakery / Sweets', 'Catering', 'Supermarket', 'Pharmacy', 'Flowers & Gifts', 'Electronics', 'Perfume', 'Cosmetics', 'Perfume & Cosmetics', 'Clothing', 'Salon', 'Spa', 'Cleaning', 'Other'].map(s => `<option>${s}</option>`).join('')}</select><input id="av_seg_other" placeholder="Specify the new type" class="hide" style="margin-top:6px"></div><div><label class="f req">Main area</label><input id="av_area"></div></div>
     <div class="grid2"><div><label class="f">Decision maker</label><input id="av_dm"></div><div><label class="f req">Best number</label><input id="av_ph" type="tel"></div></div>
     <label class="f">Email</label><input id="av_em" type="email">
     <h3 style="margin-top:14px;font-size:15px">First branch</h3>
