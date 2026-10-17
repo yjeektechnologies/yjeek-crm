@@ -132,7 +132,7 @@ const idb = {
 };
 function expand(tbl) { const k = tbl.k; return tbl.r.map(r => { const o = {}; k.forEach((key, i) => o[key] = r[i]); return o; }); }
 function buildDB(raw) {
-  const db = { generated: raw.generated, meta: raw.meta, vendors: expand(raw.vendors), branches: expand(raw.branches), activities: expand(raw.activities), terms: expand(raw.terms), pending: expand(raw.pending), byId: {}, brOf: {}, actOf: {}, termOf: {} };
+  const db = { generated: raw.generated, meta: raw.meta, vendors: expand(raw.vendors), branches: expand(raw.branches), activities: expand(raw.activities), terms: expand(raw.terms), pending: expand(raw.pending), menuQueue: raw.menuQueue ? expand(raw.menuQueue) : [], byId: {}, brOf: {}, actOf: {}, termOf: {} };
   db.vendors.forEach(v => { v.vid = String(v['Vendor ID']); v.pending = false; db.byId[v.vid] = v; });
   db.branches.forEach(b => { b.vid = String(b['Vendor ID']); (db.brOf[b.vid] = db.brOf[b.vid] || []).push(b); });
   Object.values(db.brOf).forEach(list => list.sort((a, c) => (Number(String(a['Branch CR']).split('-')[1]) || 0) - (Number(String(c['Branch CR']).split('-')[1]) || 0)));
@@ -171,20 +171,20 @@ function render() {
   const mgr = S.user.role === 'manager';
   const age = Math.round((Date.now() - new Date(S.db.generated).getTime()) / 60000);
   app.innerHTML = `
-  <header class="top">${S.view === 'vendor' ? '<button class="back" onclick="go(S.prevView||\'vendors\')">‹</button>' : '<div class="logo">Y</div>'}
-    <h1>${S.view === 'vendor' && S.vendor ? esc(S.vendor['Brand (Trade Name)']) : { home: 'Today', vendors: 'Vendors', dash: 'Dashboard', pins: 'Pin check', approvals: 'Approvals' }[S.view] || 'Yjeek CRM'}</h1>
+  <header class="top">${S.view === 'vendor' || S.view === 'progress' ? '<button class="back" onclick="go(S.prevView||\'home\')">‹</button>' : '<div class="logo">Y</div>'}
+    <h1>${S.view === 'vendor' && S.vendor ? esc(S.vendor['Brand (Trade Name)']) : { home: 'Today', vendors: 'Vendors', dash: 'Dashboard', pins: 'Pin check', approvals: 'To-do', progress: 'My progress' }[S.view] || 'Yjeek CRM'}</h1>
     <span style="color:#fff;opacity:.8;font-size:12px" title="snapshot age">${age < 1 ? 'live' : age + ' min'}</span><span style="color:#fff;opacity:.85;font-size:13px">${esc(S.user.name)}</span><button onclick="logout()">Sign out</button></header>
   <main id="main"></main>
   <nav class="tabs">
     ${tab('home', 'Today', 'M3 12l9-9 9 9M5 10v10h14V10')}
     ${tab('vendors', 'Vendors', 'M4 6h16M4 12h16M4 18h10')}
     ${mgr ? tab('dash', 'Dashboard', 'M4 20V10M10 20V4M16 20v-7M22 20H2') : ''}
-    ${mgr ? tab('approvals', 'Approvals' + (pendingCount() ? ' (' + pendingCount() + ')' : ''), 'M9 12l2 2 4-4M12 22a10 10 0 100-20 10 10 0 000 20z') : ''}
+    ${mgr ? tab('approvals', 'To-do' + (pendingCount() ? ' (' + pendingCount() + ')' : ''), 'M9 12l2 2 4-4M12 22a10 10 0 100-20 10 10 0 000 20z') : ''}
     ${mgr ? tab('pins', 'Pins', 'M12 21s-7-6-7-11a7 7 0 0114 0c0 5-7 11-7 11zM12 10a2 2 0 100-4 2 2 0 000 4z') : ''}
   </nav>`;
-  ({ home: homeView, vendors: vendorsView, vendor: vendorView, dash: dashView, pins: pinsView, approvals: approvalsView })[S.view]();
+  ({ home: homeView, vendors: vendorsView, vendor: vendorView, dash: dashView, pins: pinsView, approvals: approvalsView, progress: progressView })[S.view]();
 }
-const pendingCount = () => S.db ? S.db.pending.filter(p => p.Status === 'Pending').length : 0;
+const pendingCount = () => S.db ? S.db.pending.filter(p => p.Status === 'Pending').length + S.db.vendors.filter(v => v['Menu Setup'] === 'Pending' || v['Menu Setup'] === 'In progress').length : 0;
 const tab = (v, l, p) => `<button class="${S.view === v ? 'on' : ''}" onclick="go('${v}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${p}"/></svg>${l}</button>`;
 function go(v) { if (S.view !== 'vendor') S.prevView = S.view; S.view = v; render(); }
 
@@ -245,6 +245,8 @@ function homeView() {
   const mine = S.user.role === 'manager' ? null : vendorsQuery({ scope: 'mine', rep: S.user.name });
   $('#main').innerHTML = `<div class="card"><input type="search" id="q" placeholder="Search vendor, CR, phone, area…" onkeydown="if(event.key==='Enter'){S.list.q=this.value;S.list.scope='all';S.list.page=1;go('vendors')}"></div>
   ${mine ? `<div class="tiles" style="margin-bottom:12px"><div class="tile"><div class="n">${mine.length}</div><div class="l">My vendors</div></div><div class="tile ${due.length ? 'warn' : ''}"><div class="n">${due.length}</div><div class="l">Follow-ups due</div></div><div class="tile"><div class="n">${mine.filter(v => v.Status === 'Contract sent').length}</div><div class="l">Contracts out</div></div><div class="tile"><div class="n">${mine.filter(v => /Signed|Onboarded/.test(v.Status)).length}</div><div class="l">Signed</div></div></div>` : ''}
+  ${(() => { const miss = (mine || vendorsQuery({ scope: 'mine', rep: '' })).filter(v => /Signed|Onboarded/.test(v.Status) && v['Assets Status'] !== 'Complete'); return miss.length ? `<div class="card"><h2>Signed — assets missing <span class="pill amber">${miss.length}</span></h2><p class="mute" style="margin:0 0 6px">Logo, banner and menu are needed before ops can set up the menu.</p><div class="list">${miss.slice(0, 30).map(vendorItem).join('')}</div></div>` : ''; })()}
+  <div class="row" style="margin-bottom:12px"><button class="btn sec grow" onclick="go('progress')">My progress</button></div>
   <div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Follow-ups due <span class="pill ${due.length ? 'red' : 'ok'}">${due.length}</span></h2><button class="btn sm" onclick="addVendorStart()">+ Add vendor</button></div>
   <div class="list" style="margin-top:6px">${due.slice(0, 50).map(vendorItem).join('') || '<p class="mute">Nothing overdue.</p>'}</div></div>`;
 }
@@ -317,9 +319,10 @@ function vendorView() {
       ${v.pending ? '' : `<button class="btn sm sec" onclick="editVendor()">Edit</button>`}${!asg && S.user.role !== 'manager' && !v.pending ? `<button class="btn sm gold" onclick="claim()">Claim</button>` : ''}</div>
     ${v['Contract sync'] ? `<p class="mute" style="margin:8px 0 0">Contract: ${esc(v['Contract sync'])}</p>` : ''}
   </div>
-  <div class="seg" style="margin-bottom:12px">${(v.pending ? [['activity', 'Activity'], ['info', 'Info']] : [['activity', 'Activity'], ['branches', 'Branches'], ['contract', 'Contract'], ['info', 'Info']]).map(t => `<button class="${S.vtab === t[0] ? 'on' : ''}" onclick="S.vtab='${t[0]}';render()">${t[1]}</button>`).join('')}</div>
+  <div class="seg" style="margin-bottom:12px">${(v.pending ? [['activity', 'Activity'], ['info', 'Info']] : [['activity', 'Activity'], ['branches', 'Branches'], ['contract', 'Contract']].concat(/Signed|Onboarded/.test(v.Status) ? [['onboard', 'Onboarding']] : []).concat([['info', 'Info']])).map(t => `<button class="${S.vtab === t[0] ? 'on' : ''}" onclick="S.vtab='${t[0]}';render()">${t[1]}</button>`).join('')}</div>
   <div id="vt"></div>`;
-  ({ activity: activityTab, branches: branchesTab, contract: contractTab, info: infoTab })[S.vtab]();
+  if (S.vtab === 'onboard' && !/Signed|Onboarded/.test(v.Status)) S.vtab = 'activity';
+  ({ activity: activityTab, branches: branchesTab, contract: contractTab, info: infoTab, onboard: onboardTab })[S.vtab]();
 }
 function activityTab() {
   const v = S.vendor; const acts = S.db.actOf[v.vid] || []; const brs = v.pending ? [] : (S.db.brOf[v.vid] || []);
@@ -332,7 +335,7 @@ function activityTab() {
     <div class="grid2"><div><label class="f">Next step</label><input type="text" id="a_next" placeholder="e.g. send proposal"></div><div><label class="f">Next date</label><input type="date" id="a_nd" value="${plusDays(7)}"></div></div>
     ${brs.length > 1 ? `<label class="f">Branch (optional)</label><select id="a_br"><option value="">—</option>${brs.map(b => `<option value="${esc(b['Branch CR'])}">${esc(b['Branch CR'])} · ${esc(b.Area)}</option>`).join('')}</select>` : ''}
     <div style="margin-top:12px"><button class="btn" style="width:100%" onclick="saveActivity(this)" ${canEdit(v) ? '' : 'disabled title="assigned to someone else"'}>Save</button></div></div>
-  <div class="card"><h2>History <span class="pill grey">${acts.length}</span></h2>${acts.slice(0, 60).map(a => `<div class="hist"><div class="d">${fmt(a.Date)} · ${esc(a.Salesperson)} · <b>${esc(a.Activity)}</b>${a['Branch CR (optional)'] ? ' · ' + esc(a['Branch CR (optional)']) : ''}${a._local ? ' · <span class="pill amber">saving…</span>' : ''}</div><div>${esc(a.Outcome)}${a['Spoke To (name & role)'] && a['Spoke To (name & role)'] !== '—' ? ' — ' + esc(a['Spoke To (name & role)']) : ''}</div>${a['Objection / Needs'] && a['Objection / Needs'] !== '—' ? `<div class="mute">Objection: ${esc(a['Objection / Needs'])}</div>` : ''}${a['Terms Discussed'] && a['Terms Discussed'] !== '—' ? `<div class="mute">Terms: ${esc(a['Terms Discussed'])}</div>` : ''}${a['Next Step'] ? `<div class="mute">Next: ${esc(a['Next Step'])} (${fmt(a['Next Date'])})</div>` : ''}</div>`).join('') || '<p class="mute">No activity yet.</p>'}
+  <div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">History <span class="pill grey">${acts.length}</span></h2><div class="row"><input type="date" style="width:auto;min-height:34px;padding:4px 8px" value="${esc(S.hFrom || '')}" onchange="S.hFrom=this.value;activityTab()"><input type="date" style="width:auto;min-height:34px;padding:4px 8px" value="${esc(S.hTo || '')}" onchange="S.hTo=this.value;activityTab()"></div></div>${acts.filter(a => (!S.hFrom || a.Date >= S.hFrom) && (!S.hTo || a.Date <= S.hTo)).slice(0, 100).map(a => `<div class="hist"><div class="d">${fmt(a.Date)} · ${esc(a.Salesperson)} · <b>${esc(a.Activity)}</b>${a['Branch CR (optional)'] ? ' · ' + esc(a['Branch CR (optional)']) : ''}${a._local ? ' · <span class="pill amber">saving…</span>' : ''}</div><div>${esc(a.Outcome)}${a['Spoke To (name & role)'] && a['Spoke To (name & role)'] !== '—' ? ' — ' + esc(a['Spoke To (name & role)']) : ''}</div>${a['Objection / Needs'] && a['Objection / Needs'] !== '—' ? `<div class="mute">Objection: ${esc(a['Objection / Needs'])}</div>` : ''}${a['Terms Discussed'] && a['Terms Discussed'] !== '—' ? `<div class="mute">Terms: ${esc(a['Terms Discussed'])}</div>` : ''}${a['Next Step'] ? `<div class="mute">Next: ${esc(a['Next Step'])} (${fmt(a['Next Date'])})</div>` : ''}</div>`).join('') || '<p class="mute">No activity yet.</p>'}
   ${v['Old Notes (history)'] ? `<details><summary class="mute">Older notes (previous sheet)</summary><pre style="white-space:pre-wrap;font:13px Inter">${esc(v['Old Notes (history)'])}</pre></details>` : ''}</div>`;
 }
 async function saveActivity(btn) {
@@ -426,6 +429,8 @@ function drawShifts() {
   <div style="text-align:right;margin-top:6px"><button class="btn sm danger" onclick="S.shiftRows.splice(${i},1);drawShifts()">Remove</button></div></div>`).join('');
 }
 async function saveShifts(btn) {
+  if (S.shiftRows.some(r => !r.days.some(Boolean))) { toast('Tick at least one day on every shift row (or remove the row)', true); return; }
+  if (S.shiftRows.some(r => !/Off|24h/.test(r.shift) && (!r.from || !r.to || r.to <= r.from))) { toast('From / To missing or To is not after From', true); return; }
   busy(btn, true); const rows = S.shiftRows.map(r => ({ days: r.days, shift: r.shift, from: r.from, to: r.to === '23:59' ? '24:00' : r.to }));
   const crs = $('#sh_all').checked ? (S.db.brOf[S.vendor.vid] || []).filter(b => !b.Closed).map(b => b['Branch CR']) : [S.shiftCR];
   try { await api('saveShifts', { vid: S.vendor.vid, crs: crs, rows: rows }); closeModal(); toast('Hours saved for ' + crs.length + ' branch' + (crs.length === 1 ? '' : 'es')); } catch (e) { toast(e.message, true); busy(btn, false); }
@@ -459,14 +464,67 @@ function termField(c, t) {
 function collectTerms() { const f = {}; document.querySelectorAll('[data-h]').forEach(el => { f[el.dataset.h] = el.type === 'checkbox' ? el.checked : el.value; }); return f; }
 async function pushContract(btn) { busy(btn, true); try { const r = await api('push', { vid: S.vendor.vid }); toast(r.message.slice(0, 120)); S.vendor._terms = r.terms; remember(db => { const vv = db.byId[S.vendor.vid]; if (vv) { vv['Contract sync'] = r.message; if (!/Signed|Onboarded/.test(vv.Status)) vv.Status = 'Contract sent'; vv['Contract Sent'] = 'Yes'; } if (r.terms) db.termOf[S.vendor.vid] = r.terms; }); S.vtab = 'contract'; render(); } catch (e) { toast(e.message, true); busy(btn, false); } }
 async function saveTerms(btn) { busy(btn, true); try { const r = await api('saveTerms', { vid: S.vendor.vid, fields: collectTerms() }); S.vendor._terms = r.terms; remember(db => { db.termOf[S.vendor.vid] = r.terms; }); toast('Terms saved'); contractTab(); } catch (e) { toast(e.message, true); busy(btn, false); } }
-async function generateNow(btn) { busy(btn, true); try { await api('saveTerms', { vid: S.vendor.vid, fields: collectTerms() }); const r = await api('generate', { vid: S.vendor.vid }); S.vendor._terms = r.terms; remember(db => { db.termOf[S.vendor.vid] = r.terms; }); toast(r.message, /Not generated|refused|Already/.test(r.message)); contractTab(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+async function generateNow(btn) { busy(btn, true); try { await api('saveTerms', { vid: S.vendor.vid, fields: collectTerms() }); const r = await api('generate', { vid: S.vendor.vid }); S.vendor._terms = r.terms; remember(db => { db.termOf[S.vendor.vid] = r.terms; }); toast(r.message, /Not generated|refused|Already|failed/.test(r.message)); contractTab(); } catch (e) { toast(e.message, true); busy(btn, false); } }
 
-// ====================================================================== manager: approvals
+// ====================================================================== onboarding assets (after signing)
+function onboardTab() {
+  const v = S.vendor; const slot = (k, label, hint) => { const url = v[label]; return `<div class="card" style="padding:12px"><div class="row" style="justify-content:space-between"><b>${label}</b>${url ? '<span class="pill ok">uploaded</span>' : '<span class="pill red">missing</span>'}</div><p class="mute" style="margin:4px 0 8px">${hint}</p>${url ? `<a href="${esc(url)}" target="_blank" class="mute">open current</a> · ` : ''}<label class="btn sm sec" style="display:inline-block">${url ? 'Replace' : 'Upload'}<input type="file" accept="image/*" class="hide" onchange="uploadAsset('${k}',this)"></label><span id="st_${k}" class="mute"></span></div>`; };
+  const mt = v['Menu Type'] || '';
+  $('#vt').innerHTML = `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Onboarding assets</h2>${statusPill(v['Assets Status'] === 'Complete' ? 'Signed' : v['Assets Status'] || 'Missing')}</div>
+    <p class="mute">Logo, banner and the menu go to the vendor's Drive folder. When all three are in, ops is notified to set up the menu.${v['Menu Setup'] ? ' Menu setup: <b>' + esc(v['Menu Setup']) + '</b>' : ''}</p></div>
+    ${slot('logo', 'Logo', 'Square, at least 500×500 px, PNG or JPG.')}
+    ${slot('banner', 'Banner', 'Landscape, at least 1200 px wide.')}
+    <div class="card" style="padding:12px"><div class="row" style="justify-content:space-between"><b>Menu</b>${v.Menu ? '<span class="pill ok">' + esc(mt || 'uploaded') + '</span>' : '<span class="pill red">missing</span>'}</div>
+      ${v.Menu ? `<p class="mute" style="margin:4px 0"><a href="${esc(v.Menu)}" target="_blank">open current</a></p>` : ''}
+      <label class="f">Talabat / online store link</label><div class="row"><input id="m_link" class="grow" placeholder="https://www.talabat.com/bahrain/…"><button class="btn sm" onclick="saveMenuLink(this)">Save link</button></div>
+      <div class="row" style="margin-top:10px"><label class="btn sm sec" style="display:inline-block">PDF menu<input type="file" accept="application/pdf" class="hide" onchange="uploadAsset('menu',this)"></label><label class="btn sm sec" style="display:inline-block">Menu photos<input type="file" accept="image/*" multiple class="hide" onchange="uploadAsset('menu-photo',this)"></label><span id="st_menu" class="mute"></span></div></div>`;
+}
+function readFile(f, maxPx) { return new Promise((ok, no) => { if (!/^image\//.test(f.type) || f.size < 400 * 1024) { const r = new FileReader(); r.onload = () => ok({ name: f.name, mime: f.type, b64: r.result.split(',')[1] }); r.onerror = no; r.readAsDataURL(f); return; }
+  const img = new Image(); img.onload = () => { const sc = Math.min(1, maxPx / Math.max(img.width, img.height)); const c = document.createElement('canvas'); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); const mime = f.type === 'image/png' ? 'image/png' : 'image/jpeg'; ok({ name: f.name.replace(/\.[^.]+$/, '') + (mime === 'image/png' ? '.png' : '.jpg'), mime: mime, b64: c.toDataURL(mime, 0.88).split(',')[1] }); }; img.onerror = no; img.src = URL.createObjectURL(f); }); }
+async function uploadAsset(kind, input) {
+  const files = Array.from(input.files || []); if (!files.length) return; const st = $('#st_' + (kind === 'menu-photo' ? 'menu' : kind)); const v = S.vendor;
+  if (kind === 'logo') { const f = files[0]; const dims = await new Promise(ok => { const i = new Image(); i.onload = () => ok([i.width, i.height]); i.onerror = () => ok([0, 0]); i.src = URL.createObjectURL(f); }); if (dims[0] && (dims[0] < 400 || Math.abs(dims[0] - dims[1]) / dims[0] > 0.25)) { toast('Logo should be square and at least 500 px', true); return; } }
+  if (kind === 'banner') { const f = files[0]; const dims = await new Promise(ok => { const i = new Image(); i.onload = () => ok([i.width, i.height]); i.onerror = () => ok([0, 0]); i.src = URL.createObjectURL(f); }); if (dims[0] && (dims[0] < 1000 || dims[0] <= dims[1])) { toast('Banner should be landscape, at least 1200 px wide', true); return; } }
+  let n = 0;
+  for (const f of files) {
+    if (f.size > 12 * 1024 * 1024) { toast(f.name + ' is over 12 MB', true); continue; }
+    st.textContent = ' uploading ' + (++n) + '/' + files.length + '…';
+    try { const file = await readFile(f, kind === 'logo' ? 1200 : 2000); const r = await api('uploadAsset', { vid: v.vid, kind: kind, file: file });
+      remember(db => { const vv = db.byId[v.vid]; if (!vv) return; vv[kind === 'logo' ? 'Logo' : kind === 'banner' ? 'Banner' : 'Menu'] = r.url; if (r.menuType) vv['Menu Type'] = r.menuType; vv['Assets Status'] = r.assetsStatus; if (r.menuSetup) vv['Menu Setup'] = r.menuSetup; });
+    } catch (e) { toast(e.message, true); st.textContent = ''; return; }
+  }
+  st.textContent = ''; toast('Uploaded'); render();
+}
+async function saveMenuLink(btn) { const link = $('#m_link').value.trim(); if (!link) return; busy(btn, true); const v = S.vendor;
+  try { const r = await api('uploadAsset', { vid: v.vid, kind: 'menu', link: link }); remember(db => { const vv = db.byId[v.vid]; if (vv) { vv.Menu = r.url; vv['Menu Type'] = r.menuType; vv['Assets Status'] = r.assetsStatus; if (r.menuSetup) vv['Menu Setup'] = r.menuSetup; } }); toast('Menu link saved'); render(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+
+// ====================================================================== rep progress (any period)
+function progressView() {
+  const P = [['today', 'Today'], ['week', 'This week'], ['lastweek', 'Last week'], ['month', 'This month'], ['lastmonth', 'Last month'], ['quarter', 'Quarter'], ['custom', 'Custom']];
+  S.pPeriod = S.pPeriod || 'week'; const r = periodRange(S.pPeriod === 'custom' ? 'custom' : S.pPeriod); const who = S.user.role === 'manager' ? (S.pRep || '') : S.user.name; const q = (S.pq || '').toLowerCase();
+  const acts = S.db.activities.filter(a => { const d = String(a.Date).slice(0, 10); if (d < r.from || d > r.to) return false; if (who && !inTeam(a.Salesperson, who)) return false; if (q) { const v = S.db.byId[a.vid] || {}; if (([v['Brand (Trade Name)'], v['Legal Name (EN)'], a.vid, a.Outcome, a['Next Step']].join(' ').toLowerCase()).indexOf(q) < 0) return false; } return true; }).sort((a, c) => c.Date > a.Date ? 1 : c.Date < a.Date ? -1 : c.row - a.row);
+  const cnt = k => acts.filter(a => k.test(a.Activity)).length; const vids = new Set(acts.map(a => a.vid));
+  const signed = S.db.vendors.filter(v => (who ? inTeam(v['Assigned To'], who) : true) && /Signed|Onboarded/.test(v.Status) && String(v['Signed Date']).slice(0, 10) >= r.from && String(v['Signed Date']).slice(0, 10) <= r.to).length;
+  $('#main').innerHTML = `<div class="card"><div class="seg">${P.map(p => `<button class="${S.pPeriod === p[0] ? 'on' : ''}" onclick="S.pPeriod='${p[0]}';progressView()">${p[1]}</button>`).join('')}</div>
+    <div class="row" style="margin-top:8px"><input type="date" style="width:auto" value="${r.from}" onchange="S.from=this.value;S.pPeriod='custom';progressView()"><span class="mute">to</span><input type="date" style="width:auto" value="${r.to}" onchange="S.to=this.value;S.pPeriod='custom';progressView()">
+    ${S.user.role === 'manager' ? `<select style="width:auto" onchange="S.pRep=this.value;progressView()"><option value="">All reps</option>${M().reps.map(x => `<option ${S.pRep === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>` : ''}
+    <input type="search" class="grow" placeholder="Search vendor / outcome…" value="${esc(S.pq || '')}" oninput="S.pq=this.value;clearTimeout(S.pt);S.pt=setTimeout(progressView,250)"></div></div>
+    <div class="tiles" style="margin-bottom:12px">${[[acts.length, 'Activities'], [cnt(/call|whatsapp|phone/i), 'Calls'], [cnt(/visit/i), 'Visits'], [cnt(/meeting/i), 'Meetings'], [vids.size, 'Vendors touched'], [cnt(/contract sent/i), 'Contracts sent'], [signed, 'Signed'], [cnt(/assets/i), 'Assets uploaded']].map(t => `<div class="tile"><div class="n">${t[0]}</div><div class="l">${t[1]}</div></div>`).join('')}</div>
+    <div class="card"><h2>Activities ${fmt(r.from)} – ${fmt(r.to)}</h2>${acts.slice(0, 300).map(a => { const v = S.db.byId[a.vid] || {}; return `<a class="item" onclick="openVendor('${esc(a.vid)}')"><div class="t"><span>${esc(v['Brand (Trade Name)'] || a.vid)}</span><span class="pill grey">${esc(a.Activity)}</span></div><div class="s"><span>${fmt(a.Date)}</span>${S.user.role === 'manager' ? '<span>' + esc(a.Salesperson) + '</span>' : ''}<span>${esc(a.Outcome)}</span>${a['Next Step'] ? '<span>next: ' + esc(a['Next Step']) + ' ' + fmt(a['Next Date']) + '</span>' : ''}</div></a>`; }).join('') || '<p class="mute">No activity in this period.</p>'}</div>`;
+  const q2 = document.querySelector('#main input[type=search]'); if (q2 && S.pq && document.activeElement !== q2) { q2.focus(); q2.setSelectionRange(q2.value.length, q2.value.length); }
+}
+
+// ====================================================================== manager: to-do (approvals + menu setups)
 function approvalsView() {
   const list = S.db.pending.slice().sort((a, c) => (a.Status === 'Pending' ? 0 : 1) - (c.Status === 'Pending' ? 0 : 1) || (c.Submitted > a.Submitted ? 1 : -1));
-  $('#main').innerHTML = `<div class="card"><h2>New vendors submitted by reps</h2><p class="mute">Check the CR on Sijilat, correct anything, then approve — the vendor and its first branch go into the pipeline assigned to the rep. Reject with a reason the rep will see.</p>
+  const menus = S.db.vendors.filter(v => v['Menu Setup'] && v['Menu Setup'] !== 'Done').sort((a, c) => a['Menu Setup'] === 'In progress' ? -1 : 1);
+  $('#main').innerHTML = `<div class="card"><h2>Menu setups waiting <span class="pill ${menus.length ? 'amber' : 'ok'}">${menus.length}</span></h2><p class="mute">Vendors whose logo, banner and menu are all in. Set up the menu in the Yjeek app, then mark Done (vendor becomes Onboarded).</p>
+  <div class="list">${menus.map(v => `<div class="item"><div class="t"><span onclick="openVendor('${esc(v.vid)}')" style="cursor:pointer">${esc(v['Brand (Trade Name)'])} · ${esc(v['Root CR'])}</span><span class="pill ${v['Menu Setup'] === 'In progress' ? 'gold' : 'amber'}">${esc(v['Menu Setup'])}</span></div><div class="s"><span>${esc(v['Menu Type'] || '')}</span><a href="${esc(v.Menu)}" target="_blank">menu</a><a href="${esc(v.Logo)}" target="_blank">logo</a><a href="${esc(v.Banner)}" target="_blank">banner</a><span>${esc(v['Assigned To'])}</span></div>
+    <div class="row" style="margin-top:6px">${v['Menu Setup'] !== 'In progress' ? `<button class="btn sm sec" onclick="menuSetup('${esc(v.vid)}','In progress',this)">Start</button>` : ''}<button class="btn sm" onclick="menuSetup('${esc(v.vid)}','Done',this)">Mark Done</button><button class="btn sm sec" onclick="menuSetup('${esc(v.vid)}','On hold',this)">On hold</button></div></div>`).join('') || '<p class="mute">Nothing waiting.</p>'}</div></div>
+  <div class="card"><h2>New vendors submitted by reps <span class="pill ${list.filter(p => p.Status === 'Pending').length ? 'amber' : 'ok'}">${list.filter(p => p.Status === 'Pending').length}</span></h2><p class="mute">Check the CR on Sijilat, correct anything, then approve — the vendor and its first branch go into the pipeline assigned to the rep. Reject with a reason the rep will see.</p>
   <div class="list">${list.map(p => `<a class="item" onclick="reviewForm('${esc(p['Pending ID'])}')"><div class="t"><span>${esc(p['Brand (Trade Name)'])} · ${esc(p['Root CR'])}</span>${statusPill(p.Status === 'Pending' ? 'Pending approval' : p.Status)}</div><div class="s"><span>${esc(p.Rep)} · ${fmt(p.Submitted)}</span><span>${esc(p.Segment)} · ${esc(p['Main Area'])}</span>${p.Reason ? '<span>' + esc(p.Reason) + '</span>' : ''}</div></a>`).join('') || '<p class="mute">Nothing waiting.</p>'}</div></div>`;
 }
+async function menuSetup(vid, status, btn) { busy(btn, true); try { await api('menuSetup', { vid: vid, status: status }); remember(db => { const v = db.byId[vid]; if (v) { v['Menu Setup'] = status; if (status === 'Done' && v.Status === 'Signed') v.Status = 'Onboarded'; } }); toast(status); render(); } catch (e) { toast(e.message, true); busy(btn, false); } }
 function reviewForm(id) {
   const p = S.db.pending.find(x => x['Pending ID'] === id); if (!p) return; const dis = p.Status !== 'Pending';
   const F = (k, label, type) => `<div><label class="f">${label}</label><input data-k="${esc(k)}" ${type ? 'type="' + type + '"' : ''} value="${esc(p[k])}" ${dis ? 'readonly' : ''}></div>`;
@@ -514,7 +572,7 @@ function computeDash(from, to, rep) {
     const nd = v['Next Follow-up (auto)']; if (nd && CLOSED.indexOf(st) < 0) { if (nd < today) { overdue++; asg.split('+').map(s => s.trim()).filter(Boolean).forEach(n => { perRep[n] = perRep[n] || { vendors: 0, signed: 0, contractSent: 0, overdue: 0 }; perRep[n].overdue++; }); } else if (nd === today) dueToday++; } });
   let branchesSigned = 0, branchesJoining = 0; db.branches.forEach(b => { if (!repOk(b['Assigned To (auto)'])) return; if (/Signed|Onboarded/.test(b['Vendor Status (auto)'])) branchesSigned++; if (b['Include in contract'] && !b.Closed) branchesJoining++; });
   const days = []; for (let d = new Date(from); d <= new Date(to); d.setDate(d.getDate() + 1)) { const k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); days.push(Object.assign({ day: k }, byDay[k] || { calls: 0, visits: 0, meetings: 0, other: 0, total: 0 })); }
-  return { days, byRep, byOutcome, funnel, perRep, tiles: { activities: days.reduce((s, x) => s + x.total, 0), visits: days.reduce((s, x) => s + x.visits, 0), signedInRange, signedVendors, branchesSigned, branchesJoining, contractSentNow, overdue, dueToday, unassigned, pending: pendingCount() } };
+  return { days, byRep, byOutcome, funnel, perRep, tiles: { activities: days.reduce((s, x) => s + x.total, 0), visits: days.reduce((s, x) => s + x.visits, 0), signedInRange, signedVendors, branchesSigned, branchesJoining, contractSentNow, overdue, dueToday, unassigned, pending: S.db.pending.filter(p => p.Status === 'Pending').length, menus: S.db.vendors.filter(v => v['Menu Setup'] === 'Pending' || v['Menu Setup'] === 'In progress').length, assetsMissing: S.db.vendors.filter(v => /Signed|Onboarded/.test(v.Status) && v['Assets Status'] !== 'Complete' && repOk(v['Assigned To'])).length } };
 }
 function dashView() {
   const m = $('#main'); const P = [['today', 'Today'], ['week', 'This week'], ['lastweek', 'Last week'], ['month', 'This month'], ['lastmonth', 'Last month'], ['quarter', 'Quarter'], ['year', 'Year'], ['custom', 'Custom']];
@@ -522,10 +580,10 @@ function dashView() {
   m.innerHTML = `<div class="card"><div class="seg">${P.map(p => `<button class="${S.period === p[0] ? 'on' : ''}" onclick="S.period='${p[0]}';dashView()">${p[1]}</button>`).join('')}</div>
     <div class="row" style="margin-top:8px"><input type="date" style="width:auto" value="${r.from}" onchange="S.from=this.value;S.period='custom';dashView()"><span class="mute">to</span><input type="date" style="width:auto" value="${r.to}" onchange="S.to=this.value;S.period='custom';dashView()">
     <select style="width:auto" onchange="S.drep=this.value;dashView()"><option value="">All reps</option>${M().reps.map(x => `<option ${S.drep === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select><button class="btn sm sec" onclick="syncNow(this)">Sync contracts</button><button class="btn sm sec" onclick="publishNow(this)">Refresh data</button></div></div>
-    <div class="tiles">${[['activities', 'Activities'], ['visits', 'Visits'], ['signedInRange', 'Signed in period'], ['branchesSigned', 'Branches signed (now)'], ['contractSentNow', 'Contracts out'], ['overdue', 'Overdue follow-ups', 'warn'], ['dueToday', 'Due today'], ['signedVendors', 'Signed vendors (total)'], ['branchesJoining', 'Branches ticked to join'], ['unassigned', 'Unassigned vendors'], ['pending', 'Awaiting approval', 'warn']].map(t => `<div class="tile ${t[2] && T[t[0]] ? 'warn' : ''}"><div class="n">${T[t[0]]}</div><div class="l">${t[1]}</div></div>`).join('')}</div>
+    <div class="tiles">${[['activities', 'Activities'], ['visits', 'Visits'], ['signedInRange', 'Signed in period'], ['branchesSigned', 'Branches signed (now)'], ['contractSentNow', 'Contracts out'], ['overdue', 'Overdue follow-ups', 'warn'], ['dueToday', 'Due today'], ['signedVendors', 'Signed vendors (total)'], ['branchesJoining', 'Branches ticked to join'], ['unassigned', 'Unassigned vendors'], ['pending', 'Awaiting approval', 'warn'], ['assetsMissing', 'Signed, assets missing', 'warn'], ['menus', 'Awaiting menu setup', 'warn']].map(t => `<div class="tile ${t[2] && T[t[0]] ? 'warn' : ''}"><div class="n">${T[t[0]]}</div><div class="l">${t[1]}</div></div>`).join('')}</div>
     <div class="grid2d" style="margin-top:12px"><div class="card"><h2>Activity per day</h2><div class="chart"><canvas id="c1"></canvas></div></div><div class="card"><h2>Activity by rep</h2><div class="chart"><canvas id="c2"></canvas></div></div>
     <div class="card"><h2>Pipeline (current statuses)</h2><div class="chart"><canvas id="c3"></canvas></div></div><div class="card"><h2>Outcomes in period</h2><div class="chart"><canvas id="c4"></canvas></div></div></div>
-    <div class="card"><h2>Reps</h2><table class="tb"><tr><th>Rep</th><th>Vendors</th><th>Activities</th><th>Visits</th><th>Contracts out</th><th>Signed</th><th>Overdue</th></tr>${Object.keys(d.perRep).sort().map(n => { const a = d.byRep[n] || { total: 0, visits: 0 }; const p = d.perRep[n]; return `<tr><td>${esc(n)}</td><td>${p.vendors}</td><td>${a.total}</td><td>${a.visits}</td><td>${p.contractSent}</td><td>${p.signed}</td><td><span class="${p.overdue ? 'pill red' : ''}">${p.overdue}</span></td></tr>`; }).join('')}</table></div>`;
+    <div class="card"><h2>Reps</h2><table class="tb"><tr><th>Rep</th><th>Vendors</th><th>Activities</th><th>Visits</th><th>Contracts out</th><th>Signed</th><th>Overdue</th></tr>${Object.keys(d.perRep).sort().map(n => { const a = d.byRep[n] || { total: 0, visits: 0 }; const p = d.perRep[n]; return `<tr><td><a onclick="S.pRep='${esc(n)}';S.pPeriod=S.period==='custom'?'custom':S.period;S.from=r.from;S.to=r.to;go('progress')" style="cursor:pointer">${esc(n)}</a></td><td>${p.vendors}</td><td>${a.total}</td><td>${a.visits}</td><td>${p.contractSent}</td><td>${p.signed}</td><td><span class="${p.overdue ? 'pill red' : ''}">${p.overdue}</span></td></tr>`; }).join('')}</table></div>`;
   drawCharts(d);
 }
 function drawCharts(d) {
