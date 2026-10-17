@@ -425,12 +425,12 @@ async function shiftsForm(cr) {
 function drawShifts() {
   $('#sh_rows').innerHTML = S.shiftRows.map((r, i) => `<div class="card" style="padding:10px"><div class="days">${M().days.map((d, k) => `<label class="${r.days[k] ? 'on' : ''}" onclick="S.shiftRows[${i}].days[${k}]=!S.shiftRows[${i}].days[${k}];drawShifts()">${d}</label>`).join('')}</div>
   <div class="grid3" style="margin-top:8px"><div><label class="f">Shift</label><select onchange="S.shiftRows[${i}].shift=this.value;drawShifts()">${M().shiftChoices.map(c => `<option ${r.shift === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
-  <div><label class="f">From</label><input type="time" step="1800" value="${esc(r.from)}" ${/Off|24h/.test(r.shift) ? 'disabled' : ''} onchange="S.shiftRows[${i}].from=this.value"></div><div><label class="f">To</label><input type="time" step="1800" value="${esc(r.to === '24:00' ? '23:59' : r.to)}" ${/Off|24h/.test(r.shift) ? 'disabled' : ''} onchange="S.shiftRows[${i}].to=this.value"></div></div>
+  <div><label class="f">From</label><input type="time" step="1800" value="${esc(r.from)}" ${/Off|24h/.test(r.shift) ? 'disabled' : ''} onchange="S.shiftRows[${i}].from=this.value"></div><div><label class="f">To</label><input type="time" step="1800" value="${esc(r.to === '24:00' ? '23:59' : r.to)}" ${/Off|24h/.test(r.shift) ? 'disabled' : ''} onchange="S.shiftRows[${i}].to=this.value;drawShifts()">${r.to && r.from && r.to !== '24:00' && r.to !== '23:59' && r.to <= r.from ? '<div class="def">closes after midnight (next day)</div>' : ''}</div></div>
   <div style="text-align:right;margin-top:6px"><button class="btn sm danger" onclick="S.shiftRows.splice(${i},1);drawShifts()">Remove</button></div></div>`).join('');
 }
 async function saveShifts(btn) {
   if (S.shiftRows.some(r => !r.days.some(Boolean))) { toast('Tick at least one day on every shift row (or remove the row)', true); return; }
-  if (S.shiftRows.some(r => !/Off|24h/.test(r.shift) && (!r.from || !r.to || r.to <= r.from))) { toast('From / To missing or To is not after From', true); return; }
+  if (S.shiftRows.some(r => !/Off|24h/.test(r.shift) && (!r.from || !r.to))) { toast('From / To missing', true); return; }
   busy(btn, true); const rows = S.shiftRows.map(r => ({ days: r.days, shift: r.shift, from: r.from, to: r.to === '23:59' ? '24:00' : r.to }));
   const crs = $('#sh_all').checked ? (S.db.brOf[S.vendor.vid] || []).filter(b => !b.Closed).map(b => b['Branch CR']) : [S.shiftCR];
   try { await api('saveShifts', { vid: S.vendor.vid, crs: crs, rows: rows }); closeModal(); toast('Hours saved for ' + crs.length + ' branch' + (crs.length === 1 ? '' : 'es')); } catch (e) { toast(e.message, true); busy(btn, false); }
