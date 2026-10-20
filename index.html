@@ -132,7 +132,7 @@ const idb = {
 };
 function expand(tbl) { const k = tbl.k; return tbl.r.map(r => { const o = {}; k.forEach((key, i) => o[key] = r[i]); return o; }); }
 function buildDB(raw) {
-  const db = { generated: raw.generated, meta: raw.meta, vendors: expand(raw.vendors), branches: expand(raw.branches), activities: expand(raw.activities), terms: expand(raw.terms), pending: expand(raw.pending), menuQueue: raw.menuQueue ? expand(raw.menuQueue) : [], byId: {}, brOf: {}, actOf: {}, termOf: {} };
+  const db = { generated: raw.generated, meta: raw.meta, vendors: expand(raw.vendors), branches: expand(raw.branches), activities: expand(raw.activities), terms: expand(raw.terms), pending: expand(raw.pending), menuQueue: raw.menuQueue ? expand(raw.menuQueue) : [], removals: raw.removals ? expand(raw.removals) : [], byId: {}, brOf: {}, actOf: {}, termOf: {} };
   db.rootCount = {}; db.vendors.forEach(v => { v.vid = String(v['Vendor ID']); v.pending = false; db.byId[v.vid] = v; const rc = String(v['Root CR']); db.rootCount[rc] = (db.rootCount[rc] || 0) + 1; });
   db.branches.forEach(b => { b.vid = String(b['Vendor ID']); (db.brOf[b.vid] = db.brOf[b.vid] || []).push(b); });
   Object.values(db.brOf).forEach(list => list.sort((a, c) => (Number(String(a['Branch CR']).split('-')[1]) || 0) - (Number(String(c['Branch CR']).split('-')[1]) || 0)));
@@ -140,6 +140,7 @@ function buildDB(raw) {
   Object.values(db.actOf).forEach(list => list.sort((a, c) => (c.Date > a.Date ? 1 : c.Date < a.Date ? -1 : c.row - a.row)));
   db.terms.forEach(t => { const list = String(t['Brands Joining'] || '').split(',').map(x => x.trim()).filter(Boolean); if (!list.length) list.push(String(t['Vendor ID'])); list.concat([String(t['Vendor ID'])]).forEach(k => db.termOf[k] = t); });
   db.pending.forEach(p => { p.vid = String(p['Root CR']); p.pending = true; });
+  db.removalOf = {}; db.removals.forEach(r => { const k = String(r['Vendor ID']); if (!db.removalOf[k] || r.Submitted > db.removalOf[k].Submitted) db.removalOf[k] = r; });
   return db;
 }
 function applyEdits(db) {   // re-apply our own recent changes on top of a (possibly older) snapshot
@@ -184,7 +185,7 @@ function render() {
   </nav>`;
   ({ home: homeView, vendors: vendorsView, vendor: vendorView, dash: dashView, pins: pinsView, approvals: approvalsView, progress: progressView })[S.view]();
 }
-const pendingCount = () => S.db ? S.db.pending.filter(p => p.Status === 'Pending').length + S.db.vendors.filter(v => v['Menu Setup'] === 'Pending' || v['Menu Setup'] === 'In progress').length : 0;
+const pendingCount = () => S.db ? S.db.pending.filter(p => p.Status === 'Pending').length + (S.db.removals || []).filter(r => r.Status === 'Pending').length + S.db.vendors.filter(v => v['Menu Setup'] === 'Pending' || v['Menu Setup'] === 'In progress').length : 0;
 const tab = (v, l, p) => `<button class="${S.view === v ? 'on' : ''}" onclick="go('${v}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${p}"/></svg>${l}</button>`;
 function go(v) { if (S.view !== 'vendor') S.prevView = S.view; S.view = v; render(); }
 
@@ -318,6 +319,7 @@ function vendorView() {
       ${ph ? `<a class="btn sm sec" href="tel:+${ph}">Call</a><a class="btn sm" style="background:#1B8F4B;border-color:#1B8F4B" href="https://wa.me/${ph}" target="_blank">WhatsApp</a>` : ''}
       ${v.pending ? '' : `<button class="btn sm sec" onclick="editVendor()">Edit</button>`}${!asg && S.user.role !== 'manager' && !v.pending ? `<button class="btn sm gold" onclick="claim()">Claim</button>` : ''}</div>
     ${v['Contract sync'] ? `<p class="mute" style="margin:8px 0 0">Contract: ${esc(v['Contract sync'])}</p>` : ''}
+    ${(() => { const r = S.db.removalOf && S.db.removalOf[v.vid]; if (!r) return ''; return r.Status === 'Pending' ? `<p class="mute" style="margin:8px 0 0"><span class="pill amber">Removal requested</span> ${esc(r.Reason)} · ${esc(r.Rep)} ${fmt(r.Submitted)} — waiting for a manager</p>` : r.Status === 'Rejected' ? `<p class="mute" style="margin:8px 0 0"><span class="pill red">Removal rejected</span> ${esc(r['Decision note'] || '')} — ${esc(r['Reviewed by'] || '')}</p>` : ''; })()}
   </div>
   <div class="seg" style="margin-bottom:12px">${(v.pending ? [['activity', 'Activity'], ['info', 'Info']] : [['activity', 'Activity'], ['branches', 'Branches'], ['contract', 'Contract']].concat(/Signed|Onboarded/.test(v.Status) ? [['onboard', 'Onboarding']] : []).concat([['info', 'Info']])).map(t => `<button class="${S.vtab === t[0] ? 'on' : ''}" onclick="S.vtab='${t[0]}';render()">${t[1]}</button>`).join('')}</div>
   <div id="vt"></div>`;
@@ -365,7 +367,44 @@ async function saveVendor(btn) {
 function infoTab() {
   const v = S.vendor; const kv = v.pending ? [['Submitted', fmt(v.Submitted)], ['By', v.Rep], ['Legal name', v['Legal Name (EN)']], ['Branch CR', v['Branch CR']], ['Branch address', [v['Branch Area'], v.Shop && 'Shop ' + v.Shop, v.Bldg && 'Bldg ' + v.Bldg, v.Road && 'Rd ' + v.Road, v.Block && 'Blk ' + v.Block].filter(Boolean).join(', ')], ['Branch contact', [v['Responsible Person'], v['Branch Phone']].filter(Boolean).join(' · ')], ['Notes', v.Notes]]
     : [['Legal (AR)', v['Legal Name (AR)']], ['Company type', v['Company Type']], ['Owners', v['Owners / Shareholders']], ['Signatories', v.Signatories], ['Group', v['Group (management)']], ['CR expiry', v['CR Expiry (earliest)']], ['All numbers', v['All Numbers']], ['Previous reps', v['Previous Reps']], ['Old status', v['Old Status']], ['Branch CRs', v['Branch CRs']], ['Signed', fmt(v['Signed Date'])], ['Commission %', v['Commission %']]];
-  $('#vt').innerHTML = `<div class="card"><div class="kv">${kv.filter(x => x[1] && x[1] !== '—').map(x => `<div>${x[0]}</div><div>${esc(x[1])}</div>`).join('') || '<div class="mute">—</div>'}</div></div>`;
+  const rr = S.db.removalOf && S.db.removalOf[v.vid]; const canReq = !v.pending && canEdit(v) && !/Signed|Onboarded/.test(v.Status) && CLOSED.indexOf(v.Status) < 0 && !(rr && rr.Status === 'Pending');
+  $('#vt').innerHTML = `<div class="card"><div class="kv">${kv.filter(x => x[1] && x[1] !== '—').map(x => `<div>${x[0]}</div><div>${esc(x[1])}</div>`).join('') || '<div class="mute">—</div>'}</div></div>
+  ${v.pending ? '' : `<div class="card"><h2>Wrong record?</h2><p class="mute">Duplicate CR, closed company, not a real business… ask a manager to remove it from the app. Nothing is deleted: the vendor is closed (or marked duplicate and its history merged) and disappears from the lists.</p>
+    ${rr && rr.Status === 'Pending' ? `<p><span class="pill amber">Pending</span> ${esc(rr.Reason)}${rr['Merge Into'] ? ' → ' + esc(rr['Merge Into']) : ''} · ${esc(rr.Rep)} ${fmt(rr.Submitted)}</p>` : ''}
+    ${rr && rr.Status !== 'Pending' ? `<p class="mute">Last request: ${esc(rr.Status)} by ${esc(rr['Reviewed by'] || '')} — ${esc(rr['Decision note'] || '')}</p>` : ''}
+    ${canReq ? `<button class="btn danger" onclick="removalForm()">Request removal</button>` : ''}</div>`}`;
+}
+const REMOVAL_REASONS = ['Duplicate of another vendor', 'CR closed / company ceased', 'Not operating (shut down)', 'Wrong category — not a Yjeek vendor', 'Wrong data — not a real business', 'Other'];
+function removalForm() {
+  const v = S.vendor;
+  modal(`<h3>Request removal · ${esc(v['Brand (Trade Name)'])}</h3><p class="mute">CR ${esc(v['Root CR'])} · ${esc(v['Legal Name (EN)'])}</p>
+    <label class="f">Reason</label><select id="rm_reason" onchange="$('#rm_dup').classList.toggle('hide', this.value !== REMOVAL_REASONS[0])"><option value="">—</option>${REMOVAL_REASONS.map(r => `<option>${esc(r)}</option>`).join('')}</select>
+    <div id="rm_dup" class="hide"><label class="f">Duplicate of (type CR or name)</label><input id="rm_q" oninput="removalSearch(this.value)" placeholder="e.g. 79531 or Aldeerah"><div id="rm_hits" class="list"></div><input type="hidden" id="rm_target"><div class="def" id="rm_sel"></div></div>
+    <label class="f">Notes (what you found)</label><input id="rm_notes" placeholder="e.g. same owner, old CR expired 2024">
+    <div class="row" style="margin-top:12px"><button class="btn danger grow" onclick="removalSubmit(this)">Send to manager</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
+}
+function removalSearch(q) {
+  q = q.trim().toLowerCase(); const el = $('#rm_hits'); if (q.length < 2) { el.innerHTML = ''; return; }
+  const hits = S.db.vendors.filter(x => x.vid !== S.vendor.vid && !x.pending && (String(x['Root CR']).indexOf(q) === 0 || String(x['Brand (Trade Name)']).toLowerCase().indexOf(q) > -1 || String(x['Legal Name (EN)']).toLowerCase().indexOf(q) > -1)).slice(0, 6);
+  el.innerHTML = hits.map(x => `<a class="item" onclick="$('#rm_target').value='${esc(x.vid)}';$('#rm_sel').textContent='→ ${esc(x['Brand (Trade Name)'])} · CR ${esc(x['Root CR'])} (${esc(x.Status || 'New')})';$('#rm_hits').innerHTML=''"><div class="t"><span>${esc(x['Brand (Trade Name)'])} · ${esc(x['Root CR'])}</span>${statusPill(x.Status)}</div><div class="s"><span>${esc(x['Legal Name (EN)'])}</span><span>${esc(x['Assigned To'] || 'unassigned')}</span></div></a>`).join('') || '<p class="mute">No match</p>';
+}
+async function removalSubmit(btn) {
+  const reason = $('#rm_reason').value, target = $('#rm_target').value, notes = $('#rm_notes').value.trim();
+  if (!reason) { toast('Pick a reason', true); return; } if (reason === REMOVAL_REASONS[0] && !target) { toast('Pick the vendor it duplicates', true); return; } if (reason === 'Other' && !notes) { toast('Explain in the notes', true); return; }
+  busy(btn, true);
+  try { const r = await api('requestRemoval', { vid: S.vendor.vid, reason: reason, mergeInto: target, notes: notes });
+    remember(db => { const rec = { 'Request ID': r.id, Submitted: new Date().toISOString().slice(0, 10), Rep: S.user.name, 'Vendor ID': S.vendor.vid, Brand: S.vendor['Brand (Trade Name)'], 'Legal Name': S.vendor['Legal Name (EN)'], 'Root CR': S.vendor['Root CR'], Reason: reason, 'Merge Into': target, Notes: notes, Status: 'Pending' }; db.removals.push(rec); db.removalOf[S.vendor.vid] = rec; });
+    closeModal(); toast('Sent — a manager will review it'); render();
+  } catch (e) { toast(e.message, true); busy(btn, false); }
+}
+async function reviewRemoval(id, approve, btn) {
+  const note = ($('#rmn_' + id) || {}).value || ''; if (!approve && !note) { toast('Give the rep a reason', true); return; }
+  busy(btn, true);
+  try { const r = await api('reviewRemoval', { id: id, approve: approve, note: note });
+    remember(db => { const rec = db.removals.find(x => x['Request ID'] === id); if (!rec) return; rec.Status = r.status; rec['Reviewed by'] = S.user.name; rec['Decision note'] = note || r.outcome;
+      if (approve) { const v = db.byId[String(rec['Vendor ID'])]; if (v) v.Status = rec.Reason === REMOVAL_REASONS[0] ? 'Duplicate' : 'Closed/Invalid'; } });
+    toast(r.status + (r.outcome ? ' — ' + r.outcome : '')); render();
+  } catch (e) { toast(e.message, true); busy(btn, false); }
 }
 
 // ---------------------------------------------------------------------- branches
@@ -547,6 +586,9 @@ function approvalsView() {
   $('#main').innerHTML = `<div class="card"><h2>Menu setups waiting <span class="pill ${menus.length ? 'amber' : 'ok'}">${menus.length}</span></h2><p class="mute">Vendors whose logo, banner and menu are all in. Set up the menu in the Yjeek app, then mark Done (vendor becomes Onboarded).</p>
   <div class="list">${menus.map(v => `<div class="item"><div class="t"><span onclick="openVendor('${esc(v.vid)}')" style="cursor:pointer">${esc(v['Brand (Trade Name)'])} · ${esc(v['Root CR'])}</span><span class="pill ${v['Menu Setup'] === 'In progress' ? 'gold' : 'amber'}">${esc(v['Menu Setup'])}</span></div><div class="s"><span>${esc(v['Menu Type'] || '')}</span><a href="${esc(v.Menu)}" target="_blank">menu</a><a href="${esc(v.Logo)}" target="_blank">logo</a><a href="${esc(v.Banner)}" target="_blank">banner</a><span>${esc(v['Assigned To'])}</span></div>
     <div class="row" style="margin-top:6px">${v['Menu Setup'] !== 'In progress' ? `<button class="btn sm sec" onclick="menuSetup('${esc(v.vid)}','In progress',this)">Start</button>` : ''}<button class="btn sm" onclick="menuSetup('${esc(v.vid)}','Done',this)">Mark Done</button><button class="btn sm sec" onclick="menuSetup('${esc(v.vid)}','On hold',this)">On hold</button></div></div>`).join('') || '<p class="mute">Nothing waiting.</p>'}</div></div>
+  ${(() => { const rl = S.db.removals.filter(r => r.Status === 'Pending').sort((a, c) => (c.Submitted > a.Submitted ? 1 : -1)); return `<div class="card"><h2>Removal requests <span class="pill ${rl.length ? 'amber' : 'ok'}">${rl.length}</span></h2><p class="mute">Approve: the vendor is closed (duplicate → marked Duplicate, its activity history moves to the surviving vendor) and leaves the lists. Reject with a note the rep will see. Rows are never deleted from the sheet.</p>
+  <div class="list">${rl.map(r => { const tgt = r['Merge Into'] ? S.db.byId[String(r['Merge Into'])] : null; return `<div class="item"><div class="t"><span onclick="openVendor('${esc(String(r['Vendor ID']))}')" style="cursor:pointer">${esc(r.Brand)} · ${esc(r['Root CR'])}</span><span class="pill amber">${esc(r.Reason)}</span></div><div class="s"><span>${esc(r['Legal Name'])}</span><span>${esc(r.Rep)} · ${fmt(r.Submitted)}</span>${tgt ? `<span>→ <a onclick="openVendor('${esc(tgt.vid)}')" style="cursor:pointer">${esc(tgt['Brand (Trade Name)'])} · ${esc(tgt['Root CR'])}</a></span>` : r['Merge Into'] ? '<span>→ ' + esc(r['Merge Into']) + '</span>' : ''}${r.Notes ? '<span>' + esc(r.Notes) + '</span>' : ''}</div>
+    <div class="row" style="margin-top:6px"><input id="rmn_${esc(r['Request ID'])}" placeholder="Note to rep (required to reject)" style="flex:1"><button class="btn sm" onclick="reviewRemoval('${esc(r['Request ID'])}',true,this)">Approve</button><button class="btn sm danger" onclick="reviewRemoval('${esc(r['Request ID'])}',false,this)">Reject</button></div></div>`; }).join('') || '<p class="mute">Nothing waiting.</p>'}</div></div>`; })()}
   <div class="card"><h2>New vendors submitted by reps <span class="pill ${list.filter(p => p.Status === 'Pending').length ? 'amber' : 'ok'}">${list.filter(p => p.Status === 'Pending').length}</span></h2><p class="mute">Check the CR on Sijilat, correct anything, then approve — the vendor and its first branch go into the pipeline assigned to the rep. Reject with a reason the rep will see.</p>
   <div class="list">${list.map(p => `<a class="item" onclick="reviewForm('${esc(p['Pending ID'])}')"><div class="t"><span>${esc(p['Brand (Trade Name)'])} · ${esc(p['Root CR'])}</span>${statusPill(p.Status === 'Pending' ? 'Pending approval' : p.Status)}</div><div class="s"><span>${esc(p.Rep)} · ${fmt(p.Submitted)}</span><span>${esc(p.Segment)} · ${esc(p['Main Area'])}</span>${p.Reason ? '<span>' + esc(p.Reason) + '</span>' : ''}</div></a>`).join('') || '<p class="mute">Nothing waiting.</p>'}</div></div>`;
 }
