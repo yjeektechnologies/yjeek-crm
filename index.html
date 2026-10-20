@@ -133,12 +133,12 @@ const idb = {
 function expand(tbl) { const k = tbl.k; return tbl.r.map(r => { const o = {}; k.forEach((key, i) => o[key] = r[i]); return o; }); }
 function buildDB(raw) {
   const db = { generated: raw.generated, meta: raw.meta, vendors: expand(raw.vendors), branches: expand(raw.branches), activities: expand(raw.activities), terms: expand(raw.terms), pending: expand(raw.pending), menuQueue: raw.menuQueue ? expand(raw.menuQueue) : [], byId: {}, brOf: {}, actOf: {}, termOf: {} };
-  db.vendors.forEach(v => { v.vid = String(v['Vendor ID']); v.pending = false; db.byId[v.vid] = v; });
+  db.rootCount = {}; db.vendors.forEach(v => { v.vid = String(v['Vendor ID']); v.pending = false; db.byId[v.vid] = v; const rc = String(v['Root CR']); db.rootCount[rc] = (db.rootCount[rc] || 0) + 1; });
   db.branches.forEach(b => { b.vid = String(b['Vendor ID']); (db.brOf[b.vid] = db.brOf[b.vid] || []).push(b); });
   Object.values(db.brOf).forEach(list => list.sort((a, c) => (Number(String(a['Branch CR']).split('-')[1]) || 0) - (Number(String(c['Branch CR']).split('-')[1]) || 0)));
   db.activities.forEach(a => { a.vid = String(a['Vendor ID']); (db.actOf[a.vid] = db.actOf[a.vid] || []).push(a); });
   Object.values(db.actOf).forEach(list => list.sort((a, c) => (c.Date > a.Date ? 1 : c.Date < a.Date ? -1 : c.row - a.row)));
-  db.terms.forEach(t => db.termOf[String(t['Vendor ID'])] = t);
+  db.terms.forEach(t => { const list = String(t['Brands Joining'] || '').split(',').map(x => x.trim()).filter(Boolean); if (!list.length) list.push(String(t['Vendor ID'])); list.concat([String(t['Vendor ID'])]).forEach(k => db.termOf[k] = t); });
   db.pending.forEach(p => { p.vid = String(p['Root CR']); p.pending = true; });
   return db;
 }
@@ -236,7 +236,7 @@ function vendorItem(v) {
   const nd = v['Next Follow-up (auto)']; const late = nd && nd < todayISO(); const asg = v.pending ? v.Rep : v['Assigned To'];
   const br = v.pending ? 1 : (Number(v.Branches) || (S.db.brOf[v.vid] || []).length);
   return `<a class="item" onclick="openVendor('${esc(v.vid)}')"><div class="t"><span>${esc(v['Brand (Trade Name)'])} <span class="mute" style="font-weight:400">· ${esc(v['Root CR'])}</span></span>${statusPill(v.pending ? 'Pending approval' : v.Status)}</div>
-  <div class="s"><span>${esc(v['Main Area'] || '—')}</span><span>${br} branch${br === 1 ? '' : 'es'}</span>${asg ? '<span>' + esc(asg) + '</span>' : '<span class="pill grey">unassigned</span>'}${nd ? `<span class="${late ? 'pill red' : ''}">next ${fmt(nd)}</span>` : ''}</div></a>`;
+  <div class="s"><span>${esc(v['Main Area'] || '—')}</span><span>${br} branch${br === 1 ? '' : 'es'}</span>${asg ? '<span>' + esc(asg) + '</span>' : '<span class="pill grey">unassigned</span>'}${S.db.rootCount && S.db.rootCount[String(v['Root CR'])] > 1 ? '<span class="pill grey">group · ' + S.db.rootCount[String(v['Root CR'])] + ' brands</span>' : ''}${nd ? `<span class="${late ? 'pill red' : ''}">next ${fmt(nd)}</span>` : ''}</div></a>`;
 }
 
 // ====================================================================== home
@@ -437,20 +437,42 @@ async function saveShifts(btn) {
 }
 
 // ---------------------------------------------------------------------- contract
+function siblingsOf(v) { return S.db.vendors.filter(x => String(x['Root CR']) === String(v['Root CR'])).sort((a, c) => (Number(a.vid.split('#')[1]) || 1) - (Number(c.vid.split('#')[1]) || 1)); }
+function joiningCount(vid) { const l = (S.db.brOf[vid] || []).filter(b => !b.Closed); const t = l.filter(b => b['Include in contract']); return (t.length || l.length) + '/' + l.length; }
 function contractTab() {
-  const v = S.vendor; const t = S.vendor._terms || S.db.termOf[v.vid]; const el = $('#vt');
-  if (!t) { el.innerHTML = `<div class="card"><h2>Contract</h2><p class="mute">Step 1 sends the vendor and the ticked branches to the contract generator and brings back the default rates (takes ~10 s). Step 2 lets you adjust terms and generate the agreement.</p>
-    <p class="mute">Joining now: <b>${((S.db.brOf[v.vid] || []).filter(b => b['Include in contract'] && !b.Closed).length || (S.db.brOf[v.vid] || []).filter(b => !b.Closed).length)}</b> branch(es). Check the Branches tab first.</p>
-    <button class="btn" style="width:100%" onclick="pushContract(this)" ${canEdit(v) ? '' : 'disabled'}>Send to contracts</button></div>`; return; }
+  const v = S.vendor; const t = S.vendor._terms || S.db.termOf[v.vid]; const el = $('#vt'); const sib = siblingsOf(v); const multi = sib.length > 1;
+  if (!t) {
+    const others = sib.filter(x => x.vid !== v.vid).map(x => { const o = S.db.termOf[x.vid]; return { x: x, other: o ? (o.Mode === 'Group' ? 'group agreement' : 'own agreement') : '' }; });
+    const free = others.filter(o => !o.other).length; const groupExists = others.some(o => o.other === 'group agreement');
+    el.innerHTML = `<div class="card"><h2>Contract</h2>
+      ${multi ? `<p class="mute">CR ${esc(v['Root CR'])} has <b>${sib.length} brands</b>: ${sib.map(x => `<span class="pill ${x.vid === v.vid ? 'gold' : 'grey'}">${esc(x['Brand (Trade Name)'])}</span>`).join(' ')}</p>
+        ${others.filter(o => o.other).length ? `<p class="mute">Already under another agreement: ${others.filter(o => o.other).map(o => esc(o.x['Brand (Trade Name)']) + ' (' + o.other + ')').join(', ')}</p>` : ''}
+        <p class="mute"><b>One agreement per CR</b> is the default — one signatory, all brands on one Branch Schedule, per-brand fees multiplied automatically (editable before generating).</p>
+        <button class="btn" style="width:100%;margin-bottom:8px" onclick="startAgreement(this,'Group')" ${canEdit(v) && !groupExists ? '' : 'disabled'}>Group agreement — ${free + 1} brand(s) of CR ${esc(v['Root CR'])}</button>
+        <button class="btn sec" style="width:100%" onclick="startAgreement(this,'Brand')" ${canEdit(v) ? '' : 'disabled'}>This brand only — ${esc(v['Brand (Trade Name)'])}</button>
+        <p class="mute" style="margin-top:8px">⚠ A brand-only agreement is for a <b>different authorised signatory</b> of the same company. The person signing must appear on the CR (Sijilat ▸ المفوضون بالتوقيع); a brand manager who is not listed cannot bind the company. You will confirm this before generating.</p>`
+      : `<p class="mute">Step 1 sends the vendor and the ticked branches to the contract generator and brings back the default rates (takes ~10 s). Step 2 lets you adjust terms and generate the agreement.</p>
+        <p class="mute">Joining now: <b>${joiningCount(v.vid).split('/')[0]}</b> branch(es). Check the Branches tab first.</p>
+        <button class="btn" style="width:100%" onclick="startAgreement(this,'Brand')" ${canEdit(v) ? '' : 'disabled'}>Send to contracts</button>`}
+      </div>`; return;
+  }
   if (!t.defaults && !t._loading) { t._loading = true; api('terms', { vid: v.vid }).then(r => { if (r.terms) { S.vendor._terms = r.terms; if (r.terms.categories) S.categories = r.terms.categories; if (S.view === 'vendor' && S.vtab === 'contract') contractTab(); } }).catch(() => { t._loading = false; }); }
-  const gen = t.generatorStatus || ''; const locked = /Issued|Signed/.test(gen);
-  el.innerHTML = `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Contract terms</h2><span class="pill ${locked ? 'ok' : 'gold'}">${esc(gen || 'Draft')}</span></div>
+  const gen = t.generatorStatus || ''; const locked = /Issued|Signed/.test(gen) || /^(Issued|Signed|Generating|Queued)/.test(t['Generation status'] || '');
+  const mode = (t.agreement && t.agreement.mode) || t.Mode || 'Brand';
+  const joined = (t.agreement ? t.agreement.brands.filter(b => b.joining).map(b => b.vid) : String(t['Brands Joining'] || '').split(',').map(x => x.trim()).filter(Boolean));
+  const brands = t.agreement ? t.agreement.brands : sib.map(x => { const o = S.db.termOf[x.vid]; return { vid: x.vid, brand: x['Brand (Trade Name)'], joining: joined.indexOf(x.vid) > -1, other: o && o !== t ? (o.Mode === 'Group' ? 'group agreement' : 'own agreement') : '' }; });
+  const nJoin = brands.filter(b => b.joining).length;
+  const head = mode === 'Group' ? `Group agreement · CR ${esc(t['Root CR'])} · ${nJoin} brand${nJoin === 1 ? '' : 's'}` : `Brand agreement · ${esc(v['Brand (Trade Name)'])}`;
+  el.innerHTML = `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">${head}</h2><span class="pill ${locked ? 'ok' : 'gold'}">${esc(gen || 'Draft')}</span></div>
     <p class="mute" style="margin:6px 0 10px">${esc(t['Generation status'] || '')}${t.defaults ? '' : ' · loading defaults…'}</p>
+    ${multi ? `<div style="margin-bottom:10px">${brands.map(b => `<label class="f" style="display:flex;align-items:center;gap:8px;margin:4px 0"><input type="checkbox" ${b.joining ? 'checked' : ''} ${mode !== 'Group' || locked || b.other ? 'disabled' : ''} onchange="toggleBrand('${esc(b.vid)}', this)" style="width:20px;height:20px;accent-color:var(--green)"> <b>${esc(b.brand)}</b> <span class="mute">· branches ${joiningCount(b.vid)}${b.other ? ' · ' + esc(b.other) : ''}</span></label>`).join('')}
+      ${mode === 'Group' ? '<div class="def">Tick the brands joining this agreement. Each brand\'s branches are chosen on its own Branches tab. Fees marked "× N brands" recompute when you change ticks.</div>' : `<div class="def">Brand-only agreement under CR ${esc(t['Root CR'])}. Printed name: ${esc(t['Legal Business Name'] || '')}</div>`}</div>` : ''}
+    ${mode === 'Brand' && multi ? `<label class="f" style="display:flex;align-items:flex-start;gap:8px;margin:8px 0 12px;padding:10px;border:1px solid var(--gold);border-radius:8px"><input type="checkbox" id="tf_sigcr" data-h="Signatory on CR" ${t['Signatory on CR'] ? 'checked' : ''} ${locked ? 'disabled' : ''} style="width:20px;height:20px;accent-color:var(--green);flex:none"><span>I checked Sijilat: <b>${esc(t['Authorised Signatory'] || 'the signatory')}</b> is listed under المفوضون بالتوقيع for CR ${esc(t['Root CR'])}. Required before generating a brand-only agreement.</span></label>` : ''}
     ${t['Agreement PDF'] ? `<div class="row" style="margin-bottom:10px"><a class="btn sm" href="${esc(t['Agreement PDF'])}">⬇ Agreement PDF</a>${t['Branch Schedule PDF'] ? `<a class="btn sm sec" href="${esc(t['Branch Schedule PDF'])}">⬇ Branch schedule PDF</a>` : ''}${t['Contract Folder'] ? `<a class="btn sm sec" href="${esc(t['Contract Folder'])}" target="_blank">Folder</a>` : ''}</div>` : ''}
-    <div class="row" style="margin-bottom:8px"><button class="btn sm sec" onclick="pushContract(this)" ${locked ? 'disabled' : ''}>Re-send branches</button><span class="mute">(after ticking / editing branches)</span></div>
+    <div class="row" style="margin-bottom:8px"><button class="btn sm sec" onclick="pushContract(this)" ${locked ? 'disabled' : ''}>Re-send branches</button><span class="mute">(after ticking / editing branches)</span>${locked ? '' : `<a href="#" class="mute" style="margin-left:auto" onclick="cancelAgreement(this);return false">Cancel agreement</a>`}</div>
     <div class="grid2d">${M().termsCols.map(c => termField(c, t)).join('')}</div>
     <div class="row" style="margin-top:14px"><button class="btn sec grow" onclick="saveTerms(this)" ${locked ? 'disabled' : ''}>Save terms</button><button class="btn gold grow" onclick="generateNow(this)" ${locked ? 'disabled' : ''}>Save & generate agreement</button></div>
-    <p class="mute" style="margin-top:8px">Blank = the standard rate from the fee document (shown underneath). Type a value only when something different was agreed with the vendor.</p></div>`;
+    <p class="mute" style="margin-top:8px">Blank = the standard rate from the fee document (shown underneath). Type a value only when something different was agreed with the vendor${mode === 'Group' ? ' — e.g. a group offer or a waived onboarding fee; what you type is printed as-is' : ''}.</p></div>`;
 }
 function termField(c, t) {
   const id = 'tf_' + c.h.replace(/[^a-z0-9]/gi, '_'); const v = t[c.h]; const def = t.defaults && t.defaults[c.h];
@@ -462,9 +484,13 @@ function termField(c, t) {
   return `<div><label class="f${req}">${esc(c.h)}</label><input id="${id}" data-h="${esc(c.h)}" class="${c.rate ? 'rate' : ''}" value="${esc(v == null ? '' : v)}" ${c.h === 'Legal Business Name' ? 'readonly' : ''} placeholder="${def ? 'default: ' + esc(def) : ''}">${def ? `<div class="def">Default: ${esc(def)}</div>` : ''}</div>`;
 }
 function collectTerms() { const f = {}; document.querySelectorAll('[data-h]').forEach(el => { f[el.dataset.h] = el.type === 'checkbox' ? el.checked : el.value; }); return f; }
-async function pushContract(btn) { busy(btn, true); try { const r = await api('push', { vid: S.vendor.vid }); toast(r.message.slice(0, 120)); S.vendor._terms = r.terms; remember(db => { const vv = db.byId[S.vendor.vid]; if (vv) { vv['Contract sync'] = r.message; if (!/Signed|Onboarded/.test(vv.Status)) vv.Status = 'Contract sent'; vv['Contract Sent'] = 'Yes'; } if (r.terms) db.termOf[S.vendor.vid] = r.terms; }); S.vtab = 'contract'; render(); } catch (e) { toast(e.message, true); busy(btn, false); } }
-async function saveTerms(btn) { busy(btn, true); try { const r = await api('saveTerms', { vid: S.vendor.vid, fields: collectTerms() }); S.vendor._terms = r.terms; remember(db => { db.termOf[S.vendor.vid] = r.terms; }); toast('Terms saved'); contractTab(); } catch (e) { toast(e.message, true); busy(btn, false); } }
-async function generateNow(btn) { busy(btn, true); try { await api('saveTerms', { vid: S.vendor.vid, fields: collectTerms() }); const r = await api('generate', { vid: S.vendor.vid }); S.vendor._terms = r.terms; remember(db => { db.termOf[S.vendor.vid] = r.terms; }); toast(r.message, /Not generated|refused|Already|failed/.test(r.message)); contractTab(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+function applyTerms(r) { if (!r.terms) return; S.vendor._terms = r.terms; const list = r.terms.agreement ? r.terms.agreement.brands.filter(b => b.joining).map(b => b.vid) : [S.vendor.vid]; remember(db => { list.forEach(k => db.termOf[k] = r.terms); if (r.message) list.forEach(k => { const vv = db.byId[k]; if (vv) { vv['Contract sync'] = r.message; if (!/Signed|Onboarded/.test(vv.Status)) vv.Status = 'Contract sent'; vv['Contract Sent'] = 'Yes'; } }); }); }
+async function startAgreement(btn, mode) { busy(btn, true); try { const r = await api('startAgreement', { vid: S.vendor.vid, mode: mode }); toast((r.message || 'Agreement started').slice(0, 120)); applyTerms(r); S.vtab = 'contract'; render(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+async function pushContract(btn) { busy(btn, true); try { const r = await api('push', { vid: S.vendor.vid }); toast(r.message.slice(0, 120)); applyTerms(r); S.vtab = 'contract'; render(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+async function toggleBrand(vid, cb) { const t = S.vendor._terms || S.db.termOf[S.vendor.vid]; const cur = t.agreement ? t.agreement.brands.filter(b => b.joining).map(b => b.vid) : String(t['Brands Joining'] || '').split(',').map(x => x.trim()).filter(Boolean); const next = cb.checked ? cur.concat([vid]) : cur.filter(x => x !== vid); if (!next.length) { cb.checked = true; toast('At least one brand must join', true); return; } cb.disabled = true; try { const r = await api('setBrands', { vid: S.vendor.vid, vids: next }); remember(db => { cur.filter(x => next.indexOf(x) < 0).forEach(x => delete db.termOf[x]); }); applyTerms(r); toast(r.message ? r.message.slice(0, 120) : 'Brands updated'); contractTab(); } catch (e) { toast(e.message, true); cb.checked = !cb.checked; cb.disabled = false; } }
+async function cancelAgreement(a) { if (!confirm('Cancel this agreement? The draft in the generator and its branch rows are removed. Nothing signed is touched.')) return; try { const t = S.vendor._terms || S.db.termOf[S.vendor.vid]; const list = t && t.agreement ? t.agreement.brands.filter(b => b.joining).map(b => b.vid) : String((t && t['Brands Joining']) || S.vendor.vid).split(',').map(x => x.trim()); await api('cancelAgreement', { vid: S.vendor.vid }); S.vendor._terms = null; remember(db => { list.forEach(k => delete db.termOf[k]); }); toast('Agreement cancelled'); contractTab(); } catch (e) { toast(e.message, true); } }
+async function saveTerms(btn) { busy(btn, true); try { const r = await api('saveTerms', { vid: S.vendor.vid, fields: collectTerms() }); applyTerms(r); toast('Terms saved'); contractTab(); } catch (e) { toast(e.message, true); busy(btn, false); } }
+async function generateNow(btn) { busy(btn, true); try { await api('saveTerms', { vid: S.vendor.vid, fields: collectTerms() }); const r = await api('generate', { vid: S.vendor.vid }); applyTerms({ terms: r.terms }); toast(r.message, /Not generated|refused|Already|failed/.test(r.message)); contractTab(); } catch (e) { toast(e.message, true); busy(btn, false); } }
 
 // ====================================================================== onboarding assets (after signing)
 function onboardTab() {
