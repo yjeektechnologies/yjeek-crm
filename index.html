@@ -372,16 +372,17 @@ function infoTab() {
   ${v.pending ? '' : `<div class="card"><h2>Wrong record?</h2><p class="mute">Duplicate CR, closed company, not a real business… ask a manager to remove it from the app. Nothing is deleted: the vendor is closed (or marked duplicate and its history merged) and disappears from the lists.</p>
     ${rr && rr.Status === 'Pending' ? `<p><span class="pill amber">Pending</span> ${esc(rr.Reason)}${rr['Merge Into'] ? ' → ' + esc(rr['Merge Into']) : ''} · ${esc(rr.Rep)} ${fmt(rr.Submitted)}</p>` : ''}
     ${rr && rr.Status !== 'Pending' ? `<p class="mute">Last request: ${esc(rr.Status)} by ${esc(rr['Reviewed by'] || '')} — ${esc(rr['Decision note'] || '')}</p>` : ''}
-    ${canReq ? `<button class="btn danger" onclick="removalForm()">Request removal</button>` : ''}</div>`}`;
+    ${canReq ? `<button class="btn danger" onclick="removalForm()">${S.user.role === 'manager' ? 'Remove vendor' : 'Request removal'}</button>` : ''}</div>`}`;
 }
 const REMOVAL_REASONS = ['Duplicate of another vendor', 'CR closed / company ceased', 'Not operating (shut down)', 'Wrong category — not a Yjeek vendor', 'Wrong data — not a real business', 'Other'];
 function removalForm() {
   const v = S.vendor;
-  modal(`<h3>Request removal · ${esc(v['Brand (Trade Name)'])}</h3><p class="mute">CR ${esc(v['Root CR'])} · ${esc(v['Legal Name (EN)'])}</p>
+  const mgr = S.user.role === 'manager';
+  modal(`<h3>${mgr ? 'Remove vendor' : 'Request removal'} · ${esc(v['Brand (Trade Name)'])}</h3>${mgr ? '<p class="mute">Applied immediately. The vendor is closed (or marked duplicate with its history merged) and leaves the lists; the row stays in the sheet with your justification.</p>' : ''}<p class="mute">CR ${esc(v['Root CR'])} · ${esc(v['Legal Name (EN)'])}</p>
     <label class="f">Reason</label><select id="rm_reason" onchange="$('#rm_dup').classList.toggle('hide', this.value !== REMOVAL_REASONS[0])"><option value="">—</option>${REMOVAL_REASONS.map(r => `<option>${esc(r)}</option>`).join('')}</select>
     <div id="rm_dup" class="hide"><label class="f">Duplicate of (type CR or name)</label><input id="rm_q" oninput="removalSearch(this.value)" placeholder="e.g. 79531 or Aldeerah"><div id="rm_hits" class="list"></div><input type="hidden" id="rm_target"><div class="def" id="rm_sel"></div></div>
     <label class="f">Notes (what you found)</label><input id="rm_notes" placeholder="e.g. same owner, old CR expired 2024">
-    <div class="row" style="margin-top:12px"><button class="btn danger grow" onclick="removalSubmit(this)">Send to manager</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
+    <div class="row" style="margin-top:12px"><button class="btn danger grow" onclick="removalSubmit(this)">${mgr ? 'Remove now' : 'Send to manager'}</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
 }
 function removalSearch(q) {
   q = q.trim().toLowerCase(); const el = $('#rm_hits'); if (q.length < 2) { el.innerHTML = ''; return; }
@@ -393,8 +394,9 @@ async function removalSubmit(btn) {
   if (!reason) { toast('Pick a reason', true); return; } if (reason === REMOVAL_REASONS[0] && !target) { toast('Pick the vendor it duplicates', true); return; } if (reason === 'Other' && !notes) { toast('Explain in the notes', true); return; }
   busy(btn, true);
   try { const r = await api('requestRemoval', { vid: S.vendor.vid, reason: reason, mergeInto: target, notes: notes });
-    remember(db => { const rec = { 'Request ID': r.id, Submitted: new Date().toISOString().slice(0, 10), Rep: S.user.name, 'Vendor ID': S.vendor.vid, Brand: S.vendor['Brand (Trade Name)'], 'Legal Name': S.vendor['Legal Name (EN)'], 'Root CR': S.vendor['Root CR'], Reason: reason, 'Merge Into': target, Notes: notes, Status: 'Pending' }; db.removals.push(rec); db.removalOf[S.vendor.vid] = rec; });
-    closeModal(); toast('Sent — a manager will review it'); render();
+    remember(db => { const rec = { 'Request ID': r.id, Submitted: new Date().toISOString().slice(0, 10), Rep: S.user.name, 'Vendor ID': S.vendor.vid, Brand: S.vendor['Brand (Trade Name)'], 'Legal Name': S.vendor['Legal Name (EN)'], 'Root CR': S.vendor['Root CR'], Reason: reason, 'Merge Into': target, Notes: notes, Status: r.applied ? 'Approved' : 'Pending', 'Reviewed by': r.applied ? S.user.name : '', 'Decision note': r.applied ? (r.outcome || '') : '' }; db.removals.push(rec); db.removalOf[S.vendor.vid] = rec;
+      if (r.applied) { const vv = db.byId[S.vendor.vid]; if (vv) vv.Status = reason === REMOVAL_REASONS[0] ? 'Duplicate' : 'Closed/Invalid'; } });
+    closeModal(); if (r.applied) { toast('Removed — ' + (r.outcome || '')); S.view = 'vendors'; S.vendor = null; render(); } else { toast('Sent — a manager will review it'); render(); }
   } catch (e) { toast(e.message, true); busy(btn, false); }
 }
 async function reviewRemoval(id, approve, btn) {
