@@ -110,6 +110,7 @@ async function api(action, params) {
   let res; try { res = await fetch(API_URL, { method: 'POST', body: JSON.stringify(body), redirect: 'follow' }); } catch (e) { throw new Error('No connection — check internet'); }
   const data = await res.json();
   if (data.auth === false) { logout(); throw new Error('Session expired — sign in again'); }
+  if (!data.ok && data.busy && !(params && params._retried)) { toast('Server busy — retrying in 20 s…'); await new Promise(r => setTimeout(r, 20000)); return api(action, Object.assign({}, params || {}, { _retried: true })); }
   if (!data.ok) throw new Error(data.error || 'Request failed');
   return data;
 }
