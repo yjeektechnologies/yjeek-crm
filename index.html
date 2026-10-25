@@ -100,7 +100,7 @@ const REFRESH_MS = 3 * 60 * 1000;
 // ======================================================================
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const S = { token: null, user: null, meta: null, db: null, view: 'home', vendor: null, vtab: 'activity', list: { scope: 'mine', q: '', status: '', page: 1, rep: '' }, charts: {}, period: 'week', from: '', to: '', drep: '', edits: [], loading: false };
+const S = { token: null, user: null, meta: null, db: null, view: 'home', vendor: null, vtab: 'activity', list: { scope: 'mine', q: '', status: '', page: 1, rep: '', kind: 'vendors' }, lead: null, contact: null, charts: {}, period: 'week', from: '', to: '', drep: '', edits: [], loading: false };
 try { const saved = JSON.parse(localStorage.getItem('yjeek_crm') || 'null'); if (saved && saved.token) { S.token = saved.token; S.user = saved.user; S.meta = saved.meta; } } catch (e) {}
 const CLOSED = ['Signed', 'Onboarded', 'Not interested', 'Closed/Invalid', 'Closed / Not operating', 'Duplicate'];
 
@@ -133,11 +133,13 @@ const idb = {
 };
 function expand(tbl) { const k = tbl.k; return tbl.r.map(r => { const o = {}; k.forEach((key, i) => o[key] = r[i]); return o; }); }
 function buildDB(raw) {
-  const db = { generated: raw.generated, meta: raw.meta, vendors: expand(raw.vendors), branches: expand(raw.branches), activities: expand(raw.activities), terms: expand(raw.terms), pending: expand(raw.pending), menuQueue: raw.menuQueue ? expand(raw.menuQueue) : [], removals: raw.removals ? expand(raw.removals) : [], byId: {}, brOf: {}, actOf: {}, termOf: {} };
+  const db = { generated: raw.generated, meta: raw.meta, vendors: expand(raw.vendors), branches: expand(raw.branches), activities: expand(raw.activities), terms: expand(raw.terms), pending: expand(raw.pending), menuQueue: raw.menuQueue ? expand(raw.menuQueue) : [], removals: raw.removals ? expand(raw.removals) : [], contacts: raw.contacts ? expand(raw.contacts) : [], leads: raw.leads ? expand(raw.leads) : [], cById: {}, lById: {}, actOfLead: {}, byId: {}, brOf: {}, actOf: {}, termOf: {} };
   db.rootCount = {}; db.vendors.forEach(v => { v.vid = String(v['Vendor ID']); v.pending = false; db.byId[v.vid] = v; const rc = String(v['Root CR']); db.rootCount[rc] = (db.rootCount[rc] || 0) + 1; });
   db.branches.forEach(b => { b.vid = String(b['Vendor ID']); (db.brOf[b.vid] = db.brOf[b.vid] || []).push(b); });
   Object.values(db.brOf).forEach(list => list.sort((a, c) => (Number(String(a['Branch CR']).split('-')[1]) || 0) - (Number(String(c['Branch CR']).split('-')[1]) || 0)));
-  db.activities.forEach(a => { a.vid = String(a['Vendor ID']); (db.actOf[a.vid] = db.actOf[a.vid] || []).push(a); });
+  db.activities.forEach(a => { a.vid = String(a['Vendor ID'] || ''); if (a.vid) (db.actOf[a.vid] = db.actOf[a.vid] || []).push(a); const lid = String(a['Lead ID'] || ''); if (lid) (db.actOfLead[lid] = db.actOfLead[lid] || []).push(a); });
+  Object.values(db.actOfLead).forEach(list => list.sort((a, c) => (c.Date > a.Date ? 1 : c.Date < a.Date ? -1 : c.row - a.row)));
+  db.contacts.forEach(c => { c.id = String(c['Contact ID']); db.cById[c.id] = c; }); db.leads.forEach(l => { l.id = String(l['Lead ID']); l.cids = String(l['Contact IDs'] || '').split(',').map(x => x.trim()).filter(Boolean); db.lById[l.id] = l; });
   Object.values(db.actOf).forEach(list => list.sort((a, c) => (c.Date > a.Date ? 1 : c.Date < a.Date ? -1 : c.row - a.row)));
   db.terms.forEach(t => { const list = String(t['Brands Joining'] || '').split(',').map(x => x.trim()).filter(Boolean); if (!list.length) list.push(String(t['Vendor ID'])); list.concat([String(t['Vendor ID'])]).forEach(k => db.termOf[k] = t); });
   db.pending.forEach(p => { p.vid = String(p['Root CR']); p.pending = true; });
@@ -173,22 +175,22 @@ function render() {
   const mgr = S.user.role === 'manager';
   const age = Math.round((Date.now() - new Date(S.db.generated).getTime()) / 60000);
   app.innerHTML = `
-  <header class="top">${S.view === 'vendor' || S.view === 'progress' ? '<button class="back" onclick="go(S.prevView||\'home\')">‹</button>' : '<div class="logo">Y</div>'}
-    <h1>${S.view === 'vendor' && S.vendor ? esc(S.vendor['Brand (Trade Name)']) : { home: 'Today', vendors: 'Vendors', dash: 'Dashboard', pins: 'Pin check', approvals: 'To-do', progress: 'My progress' }[S.view] || 'Yjeek CRM'}</h1>
+  <header class="top">${['vendor', 'progress', 'lead', 'contact'].indexOf(S.view) > -1 ? '<button class="back" onclick="go(S.prevView||\'home\')">‹</button>' : '<div class="logo">Y</div>'}
+    <h1>${S.view === 'vendor' && S.vendor ? esc(S.vendor['Brand (Trade Name)']) : S.view === 'lead' && S.lead ? esc(S.lead['Brand Name']) : S.view === 'contact' && S.contact ? esc(S.contact.Name) : { home: 'Today', vendors: 'Pipeline', dash: 'Dashboard', pins: 'Pin check', approvals: 'To-do', progress: 'My progress' }[S.view] || 'Yjeek CRM'}</h1>
     <span style="color:#fff;opacity:.8;font-size:12px" title="snapshot age">${age < 1 ? 'live' : age + ' min'}</span><span style="color:#fff;opacity:.85;font-size:13px">${esc(S.user.name)}</span><button onclick="logout()">Sign out</button></header>
   <main id="main"></main>
   <nav class="tabs">
     ${tab('home', 'Today', 'M3 12l9-9 9 9M5 10v10h14V10')}
-    ${tab('vendors', 'Vendors', 'M4 6h16M4 12h16M4 18h10')}
+    ${tab('vendors', 'Pipeline', 'M4 6h16M4 12h16M4 18h10')}
     ${mgr ? tab('dash', 'Dashboard', 'M4 20V10M10 20V4M16 20v-7M22 20H2') : ''}
     ${mgr ? tab('approvals', 'To-do' + (pendingCount() ? ' (' + pendingCount() + ')' : ''), 'M9 12l2 2 4-4M12 22a10 10 0 100-20 10 10 0 000 20z') : ''}
     ${mgr ? tab('pins', 'Pins', 'M12 21s-7-6-7-11a7 7 0 0114 0c0 5-7 11-7 11zM12 10a2 2 0 100-4 2 2 0 000 4z') : ''}
   </nav>`;
-  ({ home: homeView, vendors: vendorsView, vendor: vendorView, dash: dashView, pins: pinsView, approvals: approvalsView, progress: progressView })[S.view]();
+  ({ home: homeView, vendors: vendorsView, vendor: vendorView, lead: leadView, contact: contactView, dash: dashView, pins: pinsView, approvals: approvalsView, progress: progressView })[S.view]();
 }
 const pendingCount = () => S.db ? S.db.pending.filter(p => p.Status === 'Pending').length + (S.db.removals || []).filter(r => r.Status === 'Pending').length + S.db.vendors.filter(v => v['Menu Setup'] === 'Pending' || v['Menu Setup'] === 'In progress').length : 0;
 const tab = (v, l, p) => `<button class="${S.view === v ? 'on' : ''}" onclick="go('${v}')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${p}"/></svg>${l}</button>`;
-function go(v) { if (S.view !== 'vendor') S.prevView = S.view; S.view = v; render(); }
+function go(v) { if (['vendor', 'lead', 'contact'].indexOf(S.view) < 0) S.prevView = S.view; S.view = v; render(); }
 
 // ====================================================================== login
 function loginView() {
@@ -246,25 +248,26 @@ function homeView() {
   const due = vendorsQuery({ scope: 'due', rep: S.user.role === 'manager' ? '' : S.user.name });
   const mine = S.user.role === 'manager' ? null : vendorsQuery({ scope: 'mine', rep: S.user.name });
   $('#main').innerHTML = `<div class="card"><input type="search" id="q" placeholder="Search vendor, CR, phone, area…" onkeydown="if(event.key==='Enter'){S.list.q=this.value;S.list.scope='all';S.list.page=1;go('vendors')}"></div>
-  ${mine ? `<div class="tiles" style="margin-bottom:12px"><div class="tile"><div class="n">${mine.length}</div><div class="l">My vendors</div></div><div class="tile ${due.length ? 'warn' : ''}"><div class="n">${due.length}</div><div class="l">Follow-ups due</div></div><div class="tile"><div class="n">${mine.filter(v => v.Status === 'Contract sent').length}</div><div class="l">Contracts out</div></div><div class="tile"><div class="n">${mine.filter(v => /Signed|Onboarded/.test(v.Status)).length}</div><div class="l">Signed</div></div></div>` : ''}
+  ${mine ? `<div class="tiles" style="margin-bottom:12px"><div class="tile" onclick="S.list.kind='vendors';go('vendors')"><div class="n">${mine.length}</div><div class="l">My vendors</div></div><div class="tile ${due.length + leadsDue().length ? 'warn' : ''}"><div class="n">${due.length + leadsDue().length}</div><div class="l">Follow-ups due</div></div><div class="tile" onclick="S.list.kind='leads';go('vendors')"><div class="n">${myLeads().filter(l => l.Status !== 'Converted' && l.Status !== 'Dropped').length}</div><div class="l">My leads</div></div><div class="tile" onclick="S.list.kind='contacts';go('vendors')"><div class="n">${myContacts().length}</div><div class="l">My contacts</div></div></div>` : ''}
   ${(() => { const src = mine || S.db.vendors; const today = new Date(); const miss = src.filter(v => v.Status === 'Signed' && v['Assets Status'] !== 'Complete').map(v => { const sd = v['Signed Date'] ? new Date(v['Signed Date']) : null; return { v: v, days: sd ? Math.floor((today - sd) / 86400000) : 0, need: ['Logo', 'Banner', 'Menu'].filter(k => !v[k]) }; }).sort((a, c) => c.days - a.days);
     return miss.length ? `<div class="card"><h2>Signed — assets missing <span class="pill ${miss.some(m => m.days >= 7) ? 'red' : 'amber'}">${miss.length}</span></h2><p class="mute" style="margin:0 0 6px">Logo, banner and menu are needed before ops can set up the menu. Target: within 3 days of signing.</p><div class="list">${miss.slice(0, 40).map(m => `<a class="item" onclick="S.vtab='onboard';openVendor('${esc(m.v.vid)}')"><div class="t"><span>${esc(m.v['Brand (Trade Name)'])} · ${esc(m.v['Root CR'])}</span><span class="pill ${m.days >= 7 ? 'red' : m.days >= 3 ? 'amber' : 'grey'}">${m.days} day${m.days === 1 ? '' : 's'}</span></div><div class="s"><span>missing: ${m.need.join(', ') || '—'}</span><span>${esc(m.v['Assigned To'] || 'unassigned')}</span></div></a>`).join('')}</div></div>` : ''; })()}
   <div class="row" style="margin-bottom:12px"><button class="btn sec grow" onclick="go('progress')">My progress</button></div>
-  <div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Follow-ups due <span class="pill ${due.length ? 'red' : 'ok'}">${due.length}</span></h2><button class="btn sm" onclick="addVendorStart()">+ Add vendor</button></div>
-  <div class="list" style="margin-top:6px">${due.slice(0, 50).map(vendorItem).join('') || '<p class="mute">Nothing overdue.</p>'}</div></div>`;
+  <div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Follow-ups due <span class="pill ${due.length + leadsDue().length ? 'red' : 'ok'}">${due.length + leadsDue().length}</span></h2><button class="btn sm" onclick="newMenu()">+ New</button></div>
+  <div class="list" style="margin-top:6px">${leadsDue().slice(0, 30).map(leadItem).join('')}${due.slice(0, 50).map(vendorItem).join('')}${due.length + leadsDue().length ? '' : '<p class="mute">Nothing overdue.</p>'}</div></div>`;
 }
 
 // ====================================================================== vendors list
 function vendorsView() {
   const L = S.list; const mgr = S.user.role === 'manager';
+  if (L.kind === 'leads') return leadsListView(); if (L.kind === 'contacts') return contactsListView();
   const all = vendorsQuery({ scope: L.scope, q: L.q, status: L.status, rep: mgr ? L.rep : S.user.name });
   const page = all.slice((L.page - 1) * 50, L.page * 50);
-  $('#main').innerHTML = `<div class="card">
+  $('#main').innerHTML = `<div class="card">${kindSeg()}
     <div class="seg" style="margin-bottom:8px">${['mine', 'due', 'unassigned', 'all'].map(s => `<button class="${L.scope === s ? 'on' : ''}" onclick="S.list.scope='${s}';S.list.page=1;vendorsView()">${{ mine: mgr ? 'Assigned' : 'Mine', due: 'Due', unassigned: 'Unassigned', all: 'All' }[s]}</button>`).join('')}</div>
     <div class="row"><input class="grow" type="search" id="q" value="${esc(L.q)}" placeholder="Search…" oninput="S.list.q=this.value;S.list.page=1;clearTimeout(S.qt);S.qt=setTimeout(vendorsView,250)">
     <select style="width:auto" onchange="S.list.status=this.value;S.list.page=1;vendorsView()"><option value="">Any status</option><option ${L.status === 'Pending approval' ? 'selected' : ''}>Pending approval</option>${M().statuses.map(s => `<option ${L.status === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>
     ${mgr ? `<select style="width:auto" onchange="S.list.rep=this.value;S.list.page=1;vendorsView()"><option value="">All reps</option>${M().teams.map(s => `<option ${L.rep === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select>` : ''}
-    <button class="btn sm" onclick="addVendorStart()">+ Add</button></div></div>
+    <button class="btn sm" onclick="newMenu()">+ New</button></div></div>
     <div class="card"><p class="mute">${all.length} vendor${all.length === 1 ? '' : 's'}</p><div class="list">${page.map(vendorItem).join('') || '<p class="mute">No vendors match.</p>'}</div>
     ${all.length > 50 ? `<div class="row" style="margin-top:8px"><button class="btn sec" onclick="S.list.page--;vendorsView()" ${L.page > 1 ? '' : 'disabled'}>‹ Prev</button><span class="mute grow" style="text-align:center">Page ${L.page} of ${Math.ceil(all.length / 50)}</span><button class="btn sec" onclick="S.list.page++;vendorsView()" ${L.page * 50 < all.length ? '' : 'disabled'}>Next ›</button></div>` : ''}</div>`;
   const q = $('#q'); if (q && document.activeElement !== q && L.q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
@@ -571,7 +574,7 @@ async function saveMenuLink(btn) { const link = $('#m_link').value.trim(); if (!
 function progressView() {
   const P = [['today', 'Today'], ['week', 'This week'], ['lastweek', 'Last week'], ['month', 'This month'], ['lastmonth', 'Last month'], ['quarter', 'Quarter'], ['custom', 'Custom']];
   S.pPeriod = S.pPeriod || 'week'; const r = periodRange(S.pPeriod === 'custom' ? 'custom' : S.pPeriod); const who = S.user.role === 'manager' ? (S.pRep || '') : S.user.name; const q = (S.pq || '').toLowerCase();
-  const acts = S.db.activities.filter(a => { const d = String(a.Date).slice(0, 10); if (d < r.from || d > r.to) return false; if (who && !inTeam(a.Salesperson, who)) return false; if (q) { const v = S.db.byId[a.vid] || {}; if (([v['Brand (Trade Name)'], v['Legal Name (EN)'], a.vid, a.Outcome, a['Next Step']].join(' ').toLowerCase()).indexOf(q) < 0) return false; } return true; }).sort((a, c) => c.Date > a.Date ? 1 : c.Date < a.Date ? -1 : c.row - a.row);
+  const acts = S.db.activities.filter(a => { const d = String(a.Date).slice(0, 10); if (d < r.from || d > r.to) return false; if (who && !inTeam(a.Salesperson, who)) return false; if (q) { const v = S.db.byId[a.vid] || S.db.lById[String(a['Lead ID'] || '')] || {}; if (([v['Brand (Trade Name)'], v['Brand Name'], v['Legal Name (EN)'], a.vid, a.Outcome, a['Next Step']].join(' ').toLowerCase()).indexOf(q) < 0) return false; } return true; }).sort((a, c) => c.Date > a.Date ? 1 : c.Date < a.Date ? -1 : c.row - a.row);
   const cnt = k => acts.filter(a => k.test(a.Activity)).length; const vids = new Set(acts.map(a => a.vid));
   const signed = S.db.vendors.filter(v => (who ? inTeam(v['Assigned To'], who) : true) && /Signed|Onboarded/.test(v.Status) && String(v['Signed Date']).slice(0, 10) >= r.from && String(v['Signed Date']).slice(0, 10) <= r.to).length;
   $('#main').innerHTML = `<div class="card"><div class="seg">${P.map(p => `<button class="${S.pPeriod === p[0] ? 'on' : ''}" onclick="S.pPeriod='${p[0]}';progressView()">${p[1]}</button>`).join('')}</div>
@@ -579,7 +582,7 @@ function progressView() {
     ${S.user.role === 'manager' ? `<select style="width:auto" onchange="S.pRep=this.value;progressView()"><option value="">All reps</option>${M().reps.map(x => `<option ${S.pRep === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>` : ''}
     <input type="search" class="grow" placeholder="Search vendor / outcome…" value="${esc(S.pq || '')}" oninput="S.pq=this.value;clearTimeout(S.pt);S.pt=setTimeout(progressView,250)"></div></div>
     <div class="tiles" style="margin-bottom:12px">${[[acts.length, 'Activities'], [cnt(/call|whatsapp|phone/i), 'Calls'], [cnt(/visit/i), 'Visits'], [cnt(/meeting/i), 'Meetings'], [vids.size, 'Vendors touched'], [cnt(/contract sent/i), 'Contracts sent'], [signed, 'Signed'], [cnt(/assets/i), 'Assets uploaded']].map(t => `<div class="tile"><div class="n">${t[0]}</div><div class="l">${t[1]}</div></div>`).join('')}</div>
-    <div class="card"><h2>Activities ${fmt(r.from)} – ${fmt(r.to)}</h2>${acts.slice(0, 300).map(a => { const v = S.db.byId[a.vid] || {}; return `<a class="item" onclick="openVendor('${esc(a.vid)}')"><div class="t"><span>${esc(v['Brand (Trade Name)'] || a.vid)}</span><span class="pill grey">${esc(a.Activity)}</span></div><div class="s"><span>${fmt(a.Date)}</span>${S.user.role === 'manager' ? '<span>' + esc(a.Salesperson) + '</span>' : ''}<span>${esc(a.Outcome)}</span>${a['Next Step'] ? '<span>next: ' + esc(a['Next Step']) + ' ' + fmt(a['Next Date']) + '</span>' : ''}</div></a>`; }).join('') || '<p class="mute">No activity in this period.</p>'}</div>`;
+    <div class="card"><h2>Activities ${fmt(r.from)} – ${fmt(r.to)}</h2>${acts.slice(0, 300).map(a => { const lid = String(a['Lead ID'] || ''); const L = !a.vid && lid ? S.db.lById[lid] : null; const v = S.db.byId[a.vid] || {}; return `<a class="item" onclick="${L ? `openLead('${esc(lid)}')` : `openVendor('${esc(a.vid)}')`}"><div class="t"><span>${esc(L ? L['Brand Name'] + ' · lead' : v['Brand (Trade Name)'] || a.vid)}</span><span class="pill grey">${esc(a.Activity)}</span></div><div class="s"><span>${fmt(a.Date)}</span>${S.user.role === 'manager' ? '<span>' + esc(a.Salesperson) + '</span>' : ''}<span>${esc(a.Outcome)}</span>${a['Next Step'] ? '<span>next: ' + esc(a['Next Step']) + ' ' + fmt(a['Next Date']) + '</span>' : ''}</div></a>`; }).join('') || '<p class="mute">No activity in this period.</p>'}</div>`;
   const q2 = document.querySelector('#main input[type=search]'); if (q2 && S.pq && document.activeElement !== q2) { q2.focus(); q2.setSelectionRange(q2.value.length, q2.value.length); }
 }
 
@@ -644,7 +647,8 @@ function computeDash(from, to, rep) {
     const nd = v['Next Follow-up (auto)']; if (nd && CLOSED.indexOf(st) < 0) { if (nd < today) { overdue++; asg.split('+').map(s => s.trim()).filter(Boolean).forEach(n => { perRep[n] = perRep[n] || { vendors: 0, signed: 0, contractSent: 0, overdue: 0 }; perRep[n].overdue++; }); } else if (nd === today) dueToday++; } });
   let branchesSigned = 0, branchesJoining = 0; db.branches.forEach(b => { if (!repOk(b['Assigned To (auto)'])) return; if (/Signed|Onboarded/.test(b['Vendor Status (auto)'])) branchesSigned++; if (b['Include in contract'] && !b.Closed) branchesJoining++; });
   const days = []; for (let d = new Date(from); d <= new Date(to); d.setDate(d.getDate() + 1)) { const k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); days.push(Object.assign({ day: k }, byDay[k] || { calls: 0, visits: 0, meetings: 0, other: 0, total: 0 })); }
-  return { days, byRep, byOutcome, funnel, perRep, tiles: { activities: days.reduce((s, x) => s + x.total, 0), visits: days.reduce((s, x) => s + x.visits, 0), signedInRange, signedVendors, branchesSigned, branchesJoining, contractSentNow, overdue, dueToday, unassigned, pending: S.db.pending.filter(p => p.Status === 'Pending').length, menus: S.db.vendors.filter(v => v['Menu Setup'] === 'Pending' || v['Menu Setup'] === 'In progress').length, assetsMissing: S.db.vendors.filter(v => /Signed|Onboarded/.test(v.Status) && v['Assets Status'] !== 'Complete' && repOk(v['Assigned To'])).length } };
+  const leads = db.leads.filter(l => repOk(l.Rep)); const contacts = db.contacts.filter(c => repOk(c.Rep));
+  return { days, byRep, byOutcome, funnel, perRep, tiles: { contactsNew: contacts.filter(c => inR(String(c.Created).slice(0, 10))).length, leadsOpen: leads.filter(LEAD_OPEN).length, leadsConverted: leads.filter(l => l.Status === 'Converted' && inR(String(l['Converted On']).slice(0, 10))).length, leadsStale: leads.filter(leadStale).length, activities: days.reduce((s, x) => s + x.total, 0), visits: days.reduce((s, x) => s + x.visits, 0), signedInRange, signedVendors, branchesSigned, branchesJoining, contractSentNow, overdue, dueToday, unassigned, pending: S.db.pending.filter(p => p.Status === 'Pending').length, menus: S.db.vendors.filter(v => v['Menu Setup'] === 'Pending' || v['Menu Setup'] === 'In progress').length, assetsMissing: S.db.vendors.filter(v => /Signed|Onboarded/.test(v.Status) && v['Assets Status'] !== 'Complete' && repOk(v['Assigned To'])).length } };
 }
 function dashView() {
   const m = $('#main'); const P = [['today', 'Today'], ['week', 'This week'], ['lastweek', 'Last week'], ['month', 'This month'], ['lastmonth', 'Last month'], ['quarter', 'Quarter'], ['year', 'Year'], ['custom', 'Custom']];
@@ -652,7 +656,7 @@ function dashView() {
   m.innerHTML = `<div class="card"><div class="seg">${P.map(p => `<button class="${S.period === p[0] ? 'on' : ''}" onclick="S.period='${p[0]}';dashView()">${p[1]}</button>`).join('')}</div>
     <div class="row" style="margin-top:8px"><input type="date" style="width:auto" value="${r.from}" onchange="S.from=this.value;S.period='custom';dashView()"><span class="mute">to</span><input type="date" style="width:auto" value="${r.to}" onchange="S.to=this.value;S.period='custom';dashView()">
     <select style="width:auto" onchange="S.drep=this.value;dashView()"><option value="">All reps</option>${M().reps.map(x => `<option ${S.drep === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select><button class="btn sm sec" onclick="syncNow(this)">Sync contracts</button><button class="btn sm sec" onclick="publishNow(this)">Refresh data</button><button class="btn sm sec" onclick="categoryForm()">+ Fee category</button></div></div>
-    <div class="tiles">${[['activities', 'Activities'], ['visits', 'Visits'], ['signedInRange', 'Signed in period'], ['branchesSigned', 'Branches signed (now)'], ['contractSentNow', 'Contracts out'], ['overdue', 'Overdue follow-ups', 'warn'], ['dueToday', 'Due today'], ['signedVendors', 'Signed vendors (total)'], ['branchesJoining', 'Branches ticked to join'], ['unassigned', 'Unassigned vendors'], ['pending', 'Awaiting approval', 'warn'], ['assetsMissing', 'Signed, assets missing', 'warn'], ['menus', 'Awaiting menu setup', 'warn']].map(t => `<div class="tile ${t[2] && T[t[0]] ? 'warn' : ''}"><div class="n">${T[t[0]]}</div><div class="l">${t[1]}</div></div>`).join('')}</div>
+    <div class="tiles">${[['activities', 'Activities'], ['visits', 'Visits'], ['signedInRange', 'Signed in period'], ['branchesSigned', 'Branches signed (now)'], ['contractSentNow', 'Contracts out'], ['overdue', 'Overdue follow-ups', 'warn'], ['dueToday', 'Due today'], ['signedVendors', 'Signed vendors (total)'], ['branchesJoining', 'Branches ticked to join'], ['unassigned', 'Unassigned vendors'], ['pending', 'Awaiting approval', 'warn'], ['assetsMissing', 'Signed, assets missing', 'warn'], ['menus', 'Awaiting menu setup', 'warn'], ['contactsNew', 'Contacts added in period'], ['leadsOpen', 'Open leads'], ['leadsConverted', 'Leads converted in period'], ['leadsStale', 'Stale leads (60d)', 'warn']].map(t => `<div class="tile ${t[2] && T[t[0]] ? 'warn' : ''}"><div class="n">${T[t[0]]}</div><div class="l">${t[1]}</div></div>`).join('')}</div>
     <div class="grid2d" style="margin-top:12px"><div class="card"><h2>Activity per day</h2><div class="chart"><canvas id="c1"></canvas></div></div><div class="card"><h2>Activity by rep</h2><div class="chart"><canvas id="c2"></canvas></div></div>
     <div class="card"><h2>Pipeline (current statuses)</h2><div class="chart"><canvas id="c3"></canvas></div></div><div class="card"><h2>Outcomes in period</h2><div class="chart"><canvas id="c4"></canvas></div></div></div>
     <div class="card"><h2>Reps</h2><table class="tb"><tr><th>Rep</th><th>Vendors</th><th>Activities</th><th>Visits</th><th>Contracts out</th><th>Signed</th><th>Overdue</th></tr>${Object.keys(d.perRep).sort().map(n => { const a = d.byRep[n] || { total: 0, visits: 0 }; const p = d.perRep[n]; return `<tr><td><a onclick="S.pRep='${esc(n)}';S.pPeriod=S.period==='custom'?'custom':S.period;S.from=r.from;S.to=r.to;go('progress')" style="cursor:pointer">${esc(n)}</a></td><td>${p.vendors}</td><td>${a.total}</td><td>${a.visits}</td><td>${p.contractSent}</td><td>${p.signed}</td><td><span class="${p.overdue ? 'pill red' : ''}">${p.overdue}</span></td></tr>`; }).join('')}</table></div>`;
@@ -715,6 +719,146 @@ async function categorySave(btn) {
   try { const r = await api('addCategory', { fields: f }); remember(db => { if (db.meta.categories && db.meta.categories.indexOf(r.name) < 0) db.meta.categories.push(r.name); }); S.categories = null; closeModal(); toast('Added: ' + r.name + ' (' + r.agreement + ')'); }
   catch (e) { toast(e.message, true); busy(btn, false); }
 }
+// ====================================================================== contacts & leads
+const LEAD_OPEN = l => l.Status !== 'Converted' && l.Status !== 'Dropped';
+function kindSeg() { return `<div class="seg" style="margin-bottom:8px">${[['vendors', 'Vendors'], ['leads', 'Leads'], ['contacts', 'Contacts']].map(k => `<button class="${S.list.kind === k[0] ? 'on' : ''}" onclick="S.list.kind='${k[0]}';S.list.page=1;S.list.q='';S.list.status='';vendorsView()">${k[1]}</button>`).join('')}</div>`; }
+function myLeads(rep) { const r = rep === undefined ? (S.user.role === 'manager' ? '' : S.user.name) : rep; return S.db.leads.filter(l => !r || l.Rep === r); }
+function myContacts(rep) { const r = rep === undefined ? (S.user.role === 'manager' ? '' : S.user.name) : rep; return S.db.contacts.filter(c => !r || c.Rep === r); }
+function leadsDue() { const t = todayISO(); return myLeads().filter(l => LEAD_OPEN(l) && l['Next Date'] && l['Next Date'] <= t).sort((a, c) => a['Next Date'] < c['Next Date'] ? -1 : 1); }
+function leadStale(l) { if (!LEAD_OPEN(l)) return false; const last = l['Last Contact'] || l.Created; return last && (Date.now() - new Date(last).getTime()) > 60 * 86400000; }
+function leadPill(st) { const c = st === 'Converted' ? 'ok' : st === 'Dropped' ? 'grey' : st === 'CR identified' ? 'gold' : st === 'Qualified' ? '' : 'amber'; return '<span class="pill ' + c + '">' + esc(st || 'New') + '</span>'; }
+function leadItem(l) { const nd = l['Next Date']; const late = nd && nd < todayISO() && LEAD_OPEN(l); const c = l.cids.map(id => S.db.cById[id]).filter(Boolean)[0];
+  return `<a class="item" onclick="openLead('${esc(l.id)}')"><div class="t"><span>${esc(l['Brand Name'])} <span class="mute" style="font-weight:400">· lead</span></span><span>${leadPill(l.Status)}${leadStale(l) ? ' <span class="pill red">stale</span>' : ''}</span></div><div class="s"><span>${esc(l.Area || '—')}</span><span>${esc(l.Segment || '—')}</span>${c ? '<span>' + esc(c.Name) + '</span>' : ''}<span>${esc(l.Rep)}</span>${nd && LEAD_OPEN(l) ? `<span class="${late ? 'pill red' : ''}">next ${fmt(nd)}</span>` : ''}</div></a>`; }
+function contactItem(c) { const leads = S.db.leads.filter(l => l.cids.indexOf(c.id) > -1); return `<a class="item" onclick="openContact('${esc(c.id)}')"><div class="t"><span>${esc(c.Name)}${c.Role ? ' <span class="mute" style="font-weight:400">· ' + esc(c.Role) + '</span>' : ''}</span><span class="mute">${esc(c.Mobile)}</span></div><div class="s"><span>${esc(c['Company / Brand'] || '—')}</span><span>${esc(c.Area || '')}</span><span>${esc(c['Met Where'] || '')} ${fmt(c['Met Date'])}</span><span>${esc(c.Rep)}</span>${leads.length ? '<span class="pill grey">' + leads.length + ' lead' + (leads.length > 1 ? 's' : '') + '</span>' : ''}</div></a>`; }
+function leadsListView() {
+  const L = S.list; const mgr = S.user.role === 'manager'; const q = (L.q || '').toLowerCase();
+  const all = myLeads(mgr ? L.rep : undefined).filter(l => (!L.status || l.Status === L.status) && (!q || [l['Brand Name'], l.Area, l.Segment, l.Notes, l.Rep].concat(l.cids.map(id => (S.db.cById[id] || {}).Name), l.cids.map(id => (S.db.cById[id] || {}).Mobile)).join(' ').toLowerCase().indexOf(q) > -1));
+  all.sort((a, c) => (LEAD_OPEN(c) - LEAD_OPEN(a)) || ((a['Next Date'] || '9') < (c['Next Date'] || '9') ? -1 : 1));
+  $('#main').innerHTML = `<div class="card">${kindSeg()}<div class="row"><input class="grow" type="search" id="q" value="${esc(L.q)}" placeholder="Search leads…" oninput="S.list.q=this.value;clearTimeout(S.qt);S.qt=setTimeout(vendorsView,250)">
+    <select style="width:auto" onchange="S.list.status=this.value;vendorsView()"><option value="">Any status</option>${(M().leadStatuses || []).map(x => `<option ${L.status === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>
+    ${mgr ? `<select style="width:auto" onchange="S.list.rep=this.value;vendorsView()"><option value="">All reps</option>${M().reps.map(x => `<option ${L.rep === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>` : ''}<button class="btn sm" onclick="leadForm()">+ Lead</button></div></div>
+    <div class="card"><p class="mute">${all.length} lead${all.length === 1 ? '' : 's'} · ${all.filter(leadStale).length} stale (no activity for 60 days)</p><div class="list">${all.slice(0, 100).map(leadItem).join('') || '<p class="mute">No leads yet. A lead is a business you are working on before its CR is confirmed.</p>'}</div></div>`;
+  const qi = $('#q'); if (qi && document.activeElement !== qi && L.q) { qi.focus(); qi.setSelectionRange(qi.value.length, qi.value.length); }
+}
+function contactsListView() {
+  const L = S.list; const mgr = S.user.role === 'manager'; const q = (L.q || '').toLowerCase().replace(/\s+/g, '');
+  const all = myContacts(mgr ? L.rep : undefined).filter(c => !q || [c.Name, c.Mobile, c['Company / Brand'], c.Area, c.Role, c.Notes].join(' ').toLowerCase().replace(/\s+/g, '').indexOf(q) > -1).sort((a, c) => (c['Met Date'] || '') > (a['Met Date'] || '') ? 1 : -1);
+  $('#main').innerHTML = `<div class="card">${kindSeg()}<div class="row"><input class="grow" type="search" id="q" value="${esc(L.q)}" placeholder="Name, number, company…" oninput="S.list.q=this.value;clearTimeout(S.qt);S.qt=setTimeout(vendorsView,250)">
+    ${mgr ? `<select style="width:auto" onchange="S.list.rep=this.value;vendorsView()"><option value="">All reps</option>${M().reps.map(x => `<option ${L.rep === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>` : ''}<button class="btn sm" onclick="contactForm()">+ Contact</button></div></div>
+    <div class="card"><p class="mute">${all.length} contact${all.length === 1 ? '' : 's'}</p><div class="list">${all.slice(0, 100).map(contactItem).join('') || '<p class="mute">No contacts yet. Save anyone you meet — owner, manager, chef — even before you know the business details.</p>'}</div></div>`;
+  const qi = $('#q'); if (qi && document.activeElement !== qi && L.q) { qi.focus(); qi.setSelectionRange(qi.value.length, qi.value.length); }
+}
+function newMenu() { modal(`<h3>What do you want to add?</h3><div class="list">
+  <a class="item" onclick="closeModal();contactForm()"><div class="t"><span>Contact</span></div><div class="s"><span>A person you met — name and number. No business details needed yet.</span></div></a>
+  <a class="item" onclick="closeModal();leadForm()"><div class="t"><span>Lead</span></div><div class="s"><span>A business you are working on, CR not confirmed yet. Gets its own follow-ups.</span></div></a>
+  <a class="item" onclick="closeModal();addVendorStart()"><div class="t"><span>Vendor (CR known)</span></div><div class="s"><span>You have the CR number from Sijilat — goes to the pipeline after approval.</span></div></a></div>
+  <div class="row" style="margin-top:10px"><button class="btn sec grow" onclick="closeModal()">Cancel</button></div>`); }
+// ---- contact
+function contactForm(id, afterSave) {
+  const c = id ? S.db.cById[id] : null; const seg = M().categories || []; S.cfAfter = afterSave || null;
+  modal(`<h3>${c ? 'Edit contact' : 'New contact'}</h3>
+    <div class="grid2"><div><label class="f req">Name</label><input id="c_name" value="${esc(c ? c.Name : '')}"></div><div><label class="f req">Mobile</label><input id="c_mob" type="tel" value="${esc(c ? c.Mobile : '')}" onblur="contactDupCheck(this.value,'${esc(id || '')}')"><div class="def" id="c_dup"></div></div></div>
+    <div class="grid2"><div><label class="f">Role</label><select id="c_role">${(M().roles || []).map(r => `<option ${c && c.Role === r ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select></div><div><label class="f">Company / brand (as they said)</label><input id="c_co" value="${esc(c ? c['Company / Brand'] : '')}"></div></div>
+    <div class="grid2"><div><label class="f">Segment</label><select id="c_seg"><option value="">—</option>${seg.map(x => `<option ${c && c.Segment === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div><div><label class="f">Area</label><input id="c_area" value="${esc(c ? c.Area : '')}"></div></div>
+    <div class="grid2"><div><label class="f">Where met</label><select id="c_met">${(M().metWhere || []).map(r => `<option ${c && c['Met Where'] === r ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select></div><div><label class="f">When</label><input type="date" id="c_date" value="${esc(c && c['Met Date'] ? String(c['Met Date']).slice(0, 10) : todayISO())}"></div></div>
+    <label class="f">Email</label><input id="c_email" type="email" value="${esc(c ? c.Email : '')}"><label class="f">Notes</label><input id="c_notes" value="${esc(c ? c.Notes : '')}" placeholder="what they own / manage, what they said">
+    <div class="row" style="margin-top:12px"><button class="btn grow" onclick="contactSave('${esc(id || '')}',this)">${c ? 'Save' : 'Save contact'}</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
+}
+function contactDupCheck(mobile, id) { const m = String(mobile).replace(/\D/g, '').slice(-8); const el = $('#c_dup'); if (!el || m.length < 8) return; const ex = S.db.contacts.find(c => c.Mobile === m && c.id !== id); el.innerHTML = ex ? `⚠ Already saved as <a onclick="closeModal();openContact('${esc(ex.id)}')" style="cursor:pointer"><b>${esc(ex.Name)}</b></a> by ${esc(ex.Rep)}` : ''; }
+async function contactSave(id, btn) {
+  const f = { name: $('#c_name').value.trim(), mobile: $('#c_mob').value.trim(), role: $('#c_role').value, company: $('#c_co').value.trim(), segment: $('#c_seg').value, area: $('#c_area').value.trim(), met: $('#c_met').value, metDate: $('#c_date').value, email: $('#c_email').value.trim(), notes: $('#c_notes').value.trim() };
+  if (!f.name || f.mobile.replace(/\D/g, '').length < 8) { toast('Name and an 8-digit mobile are required', true); return; }
+  busy(btn, true);
+  try {
+    const r = id ? await api('updateContact', { id: id, fields: f }) : await api('addContact', { fields: f });
+    const m8 = f.mobile.replace(/\D/g, '').slice(-8); const cid = id || r.id;
+    remember(db => { let c = db.cById[cid]; if (!c) { c = { 'Contact ID': cid, id: cid, Created: todayISO(), Rep: S.user.name }; db.contacts.push(c); db.cById[cid] = c; } Object.assign(c, { Name: f.name, Mobile: m8, Role: f.role, 'Company / Brand': f.company, Segment: f.segment, Area: f.area, 'Met Where': f.met, 'Met Date': f.metDate, Email: f.email, Notes: f.notes }); });
+    closeModal(); toast(id ? 'Contact updated' : 'Contact saved');
+    const after = S.cfAfter; S.cfAfter = null;
+    if (!id && after) { after(cid); return; }
+    if (!id && confirm('Create a lead for ' + (f.company || f.name) + ' now?')) { leadForm(null, { brand: f.company, segment: f.segment, area: f.area, cid: cid }); return; }
+    render();
+  } catch (e) { toast(e.message, true); busy(btn, false); }
+}
+function openContact(id) { const c = S.db.cById[id]; if (!c) { toast('Contact not found', true); return; } if (S.user.role !== 'manager' && c.Rep !== S.user.name) { toast('Not your contact', true); return; } if (['vendor', 'lead', 'contact'].indexOf(S.view) < 0) S.prevView = S.view; S.contact = c; S.view = 'contact'; render(); window.scrollTo(0, 0); }
+function contactView() {
+  const c = S.db.cById[S.contact.id] || S.contact; const leads = S.db.leads.filter(l => l.cids.indexOf(c.id) > -1); const vendors = S.db.vendors.filter(v => String(v['All Numbers'] || '').indexOf(c.Mobile) > -1 || String(v['Best Number'] || '').replace(/\D/g, '').slice(-8) === c.Mobile);
+  const pre = JSON.stringify({ brand: c['Company / Brand'] || '', segment: c.Segment || '', area: c.Area || '', cid: c.id }).replace(/"/g, '&quot;');
+  $('#main').innerHTML = `<div class="card"><h2 style="margin:0">${esc(c.Name)}${c.Role ? ' <span class="mute" style="font-weight:400">· ' + esc(c.Role) + '</span>' : ''}</h2><p class="mute" style="margin:4px 0">${esc(c['Company / Brand'] || '')}${c.Segment ? ' · ' + esc(c.Segment) : ''}${c.Area ? ' · ' + esc(c.Area) : ''}</p>
+    <p class="mute" style="margin:4px 0">Met: ${esc(c['Met Where'] || '—')} · ${fmt(c['Met Date'])} · by ${esc(c.Rep)}</p>${c.Notes ? `<p style="margin:6px 0">${esc(c.Notes)}</p>` : ''}
+    <div class="row" style="margin-top:8px"><a class="btn sec" href="tel:+973${esc(c.Mobile)}">Call ${esc(c.Mobile)}</a><a class="btn" href="https://wa.me/973${esc(c.Mobile)}" target="_blank">WhatsApp</a>${c.Email ? `<a class="btn sec" href="mailto:${esc(c.Email)}">Email</a>` : ''}<button class="btn sec" onclick="contactForm('${esc(c.id)}')">Edit</button></div></div>
+    <div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Leads <span class="pill grey">${leads.length}</span></h2><button class="btn sm" onclick="leadForm(null, JSON.parse(this.dataset.pre))" data-pre="${pre}">+ Lead for this contact</button></div><div class="list" style="margin-top:6px">${leads.map(leadItem).join('') || '<p class="mute">No lead yet — create one when you know what business they bring.</p>'}</div></div>
+    ${vendors.length ? `<div class="card"><h2>Vendors with this number</h2><div class="list">${vendors.slice(0, 10).map(vendorItem).join('')}</div></div>` : ''}`;
+}
+// ---- lead
+function leadForm(id, pre) {
+  const l = id ? S.db.lById[id] : null; pre = pre || {}; const seg = M().categories || [];
+  if (!S.lfKeep) S.lfCids = l ? l.cids.slice() : (pre.cid ? [pre.cid] : []); S.lfKeep = false; S.lfId = id || ''; S.lfPre = pre;
+  modal(`<h3>${l ? 'Edit lead' : 'New lead'}</h3>
+    <label class="f req">Business / brand name</label><input id="l_brand" value="${esc(l ? l['Brand Name'] : pre.brand || '')}">
+    <div class="grid2"><div><label class="f">Segment</label><select id="l_seg"><option value="">—</option>${seg.map(x => `<option ${(l ? l.Segment : pre.segment) === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div><div><label class="f">Area</label><input id="l_area" value="${esc(l ? l.Area : pre.area || '')}"></div></div>
+    <label class="f">Contacts</label><div id="l_cids">${leadCidChips()}</div><input id="l_cq" placeholder="type a name or number to link a contact…" oninput="leadCidSearch(this.value)"><div id="l_chits" class="list"></div><div class="def"><a onclick="leadNewContact()" style="cursor:pointer">+ new contact</a></div>
+    <div class="grid2"><div><label class="f">Interest</label><select id="l_int">${(M().interest || []).map(x => `<option ${(l ? l.Interest : 'Unknown') === x ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select></div><div><label class="f">Next date</label><input type="date" id="l_nd" value="${esc(l && l['Next Date'] ? String(l['Next Date']).slice(0, 10) : plusDays(7))}"></div></div>
+    <label class="f">Next step</label><input id="l_next" value="${esc(l ? l['Next Step'] : '')}" placeholder="e.g. visit the shop, get the CR">
+    <label class="f">Notes</label><input id="l_notes" value="${esc(l ? l.Notes : '')}" placeholder="what they own, how many outlets, what they want">
+    <div class="row" style="margin-top:12px"><button class="btn grow" onclick="leadSave('${esc(id || '')}',this)">${l ? 'Save' : 'Save lead'}</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
+}
+function leadNewContact() { const id = S.lfId, pre = S.lfPre; contactForm(null, cid => { S.lfCids.push(cid); S.lfKeep = true; leadForm(id, pre); }); }
+function leadCidChips() { return (S.lfCids || []).map(id => { const c = S.db.cById[id]; return c ? `<span class="pill grey" style="margin:2px">${esc(c.Name)} · ${esc(c.Mobile)} <a onclick="S.lfCids=S.lfCids.filter(x=>x!=='${esc(id)}');$('#l_cids').innerHTML=leadCidChips()" style="cursor:pointer">✕</a></span>` : ''; }).join('') || '<span class="mute">none linked</span>'; }
+function leadCidSearch(q) { q = q.trim().toLowerCase(); const el = $('#l_chits'); if (q.length < 2) { el.innerHTML = ''; return; } const dq = q.replace(/\D/g, ''); const hits = myContacts().filter(c => (S.lfCids || []).indexOf(c.id) < 0 && (c.Name.toLowerCase().indexOf(q) > -1 || (dq.length >= 3 && c.Mobile.indexOf(dq) > -1) || String(c['Company / Brand'] || '').toLowerCase().indexOf(q) > -1)).slice(0, 6);
+  el.innerHTML = hits.map(c => `<a class="item" onclick="S.lfCids.push('${esc(c.id)}');$('#l_cids').innerHTML=leadCidChips();$('#l_cq').value='';$('#l_chits').innerHTML=''"><div class="t"><span>${esc(c.Name)}</span><span class="mute">${esc(c.Mobile)}</span></div><div class="s"><span>${esc(c['Company / Brand'] || '')}</span></div></a>`).join('') || '<p class="mute">No match — add a new contact below.</p>'; }
+async function leadSave(id, btn) {
+  const f = { brand: $('#l_brand').value.trim(), segment: $('#l_seg').value, area: $('#l_area').value.trim(), contactIds: (S.lfCids || []).join(', '), interest: $('#l_int').value, nextDate: $('#l_nd').value, next: $('#l_next').value.trim(), notes: $('#l_notes').value.trim() };
+  if (!f.brand) { toast('Business name is required', true); return; } busy(btn, true);
+  try { const r = id ? await api('updateLead', { id: id, fields: f }) : await api('addLead', { fields: f }); const lid = id || r.id; const cids = (S.lfCids || []).slice();
+    remember(db => { let l = db.lById[lid]; if (!l) { l = { 'Lead ID': lid, id: lid, Created: todayISO(), Rep: S.user.name, Status: 'New' }; db.leads.push(l); db.lById[lid] = l; } Object.assign(l, { 'Brand Name': f.brand, Segment: f.segment, Area: f.area, 'Contact IDs': f.contactIds, cids: cids, Interest: f.interest, 'Next Date': f.nextDate, 'Next Step': f.next, Notes: f.notes }); });
+    closeModal(); toast(id ? 'Lead updated' : 'Lead saved'); openLead(lid);
+  } catch (e) { toast(e.message, true); busy(btn, false); }
+}
+function openLead(id) { const l = S.db.lById[id]; if (!l) { toast('Lead not found', true); return; } if (S.user.role !== 'manager' && l.Rep !== S.user.name) { toast('Not your lead', true); return; } if (['vendor', 'lead', 'contact'].indexOf(S.view) < 0) S.prevView = S.view; S.lead = l; S.view = 'lead'; render(); window.scrollTo(0, 0); }
+function leadView() {
+  const l = S.db.lById[S.lead.id] || S.lead; const open = LEAD_OPEN(l); const cs = l.cids.map(id => S.db.cById[id]).filter(Boolean); const acts = S.db.actOfLead[l.id] || [];
+  const conv = l['Converted To'] ? S.db.byId[String(l['Converted To'])] : null;
+  $('#main').innerHTML = `<div class="card"><div class="row" style="justify-content:space-between"><h2 style="margin:0">${esc(l['Brand Name'])} <span class="mute" style="font-weight:400">· lead</span></h2><span>${leadPill(l.Status)}${leadStale(l) ? ' <span class="pill red">stale</span>' : ''}</span></div>
+    <p class="mute" style="margin:4px 0">${esc(l.Segment || '—')} · ${esc(l.Area || '—')} · interest ${esc(l.Interest || 'Unknown')} · ${esc(l.Rep)}${l['Next Date'] && open ? ' · next ' + fmt(l['Next Date']) + (l['Next Step'] ? ' — ' + esc(l['Next Step']) : '') : ''}</p>
+    ${l.Notes ? `<p style="margin:6px 0">${esc(l.Notes)}</p>` : ''}
+    ${l.Status === 'CR identified' ? `<p class="mute"><span class="pill gold">CR ${esc(l['Root CR'])}</span> waiting for manager approval — converts automatically.</p>` : ''}
+    ${conv ? `<p class="mute">Converted → <a onclick="openVendor('${esc(conv.vid)}')" style="cursor:pointer"><b>${esc(conv['Brand (Trade Name)'])} · CR ${esc(conv['Root CR'])}</b></a></p>` : l['Converted To'] ? `<p class="mute">Converted → ${esc(l['Converted To'])}</p>` : ''}
+    <div style="margin:8px 0">${cs.map(c => `<div class="row" style="margin:4px 0"><a onclick="openContact('${esc(c.id)}')" style="cursor:pointer"><b>${esc(c.Name)}</b>${c.Role ? ' · ' + esc(c.Role) : ''}</a><a class="btn sm sec" href="tel:+973${esc(c.Mobile)}">Call</a><a class="btn sm" href="https://wa.me/973${esc(c.Mobile)}" target="_blank">WhatsApp</a></div>`).join('') || '<span class="mute">No contact linked.</span>'}</div>
+    ${open ? `<div class="row"><button class="btn sec" onclick="leadForm('${esc(l.id)}')">Edit</button><button class="btn gold" onclick="convertForm('${esc(l.id)}')">CR known → convert</button><button class="btn sec" onclick="dropLead('${esc(l.id)}')">Drop</button></div>` : ''}</div>
+    ${open ? `<div class="card"><h2>Log activity</h2>
+    <div class="grid2"><div><label class="f req">Activity</label><select id="a_act">${M().activities.map(a => `<option>${esc(a)}</option>`).join('')}</select></div><div><label class="f">Date</label><input type="date" id="a_date" value="${todayISO()}"></div></div>
+    <label class="f">Spoke to</label><input id="a_spoke" value="${esc(cs[0] ? cs[0].Name + (cs[0].Role ? ' (' + cs[0].Role + ')' : '') : '')}">
+    <div class="grid2"><div><label class="f req">Outcome</label><select id="a_out">${M().outcomes.map(a => `<option>${esc(a)}</option>`).join('')}</select></div><div><label class="f">Lead status</label><select id="a_st"><option value="">keep ${esc(l.Status)}</option><option>New</option><option>Qualified</option><option>Dropped</option></select></div></div>
+    <div class="grid2"><div><label class="f">Interest</label><select id="a_int"><option value="">keep ${esc(l.Interest || 'Unknown')}</option>${(M().interest || []).map(x => `<option>${esc(x)}</option>`).join('')}</select></div><div><label class="f">Next date</label><input type="date" id="a_nd" value="${plusDays(7)}"></div></div>
+    <label class="f">Objection / needs</label><input id="a_obj"><label class="f">Next step</label><input id="a_next" placeholder="e.g. get the CR from the owner">
+    <div style="margin-top:12px"><button class="btn" style="width:100%" onclick="saveLeadActivity(this)">Save</button></div></div>` : ''}
+    <div class="card"><h2>History <span class="pill grey">${acts.length}</span></h2>${acts.slice(0, 100).map(a => `<div class="hist"><div class="d">${fmt(a.Date)} · ${esc(a.Salesperson)} · <b>${esc(a.Activity)}</b>${a._local ? ' · <span class="pill amber">saving…</span>' : ''}</div><div>${esc(a.Outcome)}${a['Spoke To (name & role)'] && a['Spoke To (name & role)'] !== '—' ? ' — ' + esc(a['Spoke To (name & role)']) : ''}</div>${a['Objection / Needs'] && a['Objection / Needs'] !== '—' ? `<div class="mute">Objection: ${esc(a['Objection / Needs'])}</div>` : ''}${a['Next Step'] ? `<div class="mute">Next: ${esc(a['Next Step'])} (${fmt(a['Next Date'])})</div>` : ''}</div>`).join('') || '<p class="mute">No activity yet.</p>'}</div>`;
+}
+async function saveLeadActivity(btn) {
+  const l = S.lead; const p = { id: l.id, activity: $('#a_act').value, date: $('#a_date').value, spoke: $('#a_spoke').value, outcome: $('#a_out').value, status: $('#a_st').value, interest: $('#a_int').value, objection: $('#a_obj').value, next: $('#a_next').value, nextDate: $('#a_nd').value };
+  const a = { Date: p.date, Salesperson: S.user.name, 'Lead ID': l.id, Activity: p.activity, 'Spoke To (name & role)': p.spoke, Outcome: p.outcome, 'Objection / Needs': p.objection, 'Next Step': p.next, 'Next Date': p.nextDate, row: 1e9, _local: true };
+  remember(db => { (db.actOfLead[l.id] = db.actOfLead[l.id] || []).unshift(a); const ll = db.lById[l.id]; if (ll) { ll['Last Contact'] = p.date; ll['Next Date'] = p.nextDate; if (p.next) ll['Next Step'] = p.next; if (p.status) ll.Status = p.status; if (p.interest) ll.Interest = p.interest; } });
+  render(); toast('Saved');
+  api('logLeadActivity', p).then(() => { a._local = false; if (S.view === 'lead') leadView(); }).catch(e => { toast('Not saved: ' + e.message, true); const list = S.db.actOfLead[l.id]; const i = list.indexOf(a); if (i > -1) list.splice(i, 1); render(); });
+}
+async function dropLead(id) { if (!confirm('Drop this lead? It stays in the list as Dropped.')) return; try { await api('updateLead', { id: id, fields: { status: 'Dropped' } }); remember(db => { const l = db.lById[id]; if (l) l.Status = 'Dropped'; }); toast('Dropped'); render(); } catch (e) { toast(e.message, true); } }
+function convertForm(id) {
+  modal(`<h3>Convert lead → vendor</h3><p class="mute">Enter the Root CR from Sijilat. If the CR is already in the pipeline, this lead (contact, number, history) merges into it. If not, it goes for manager approval and converts on approval.</p>
+    <label class="f req">Root CR</label><input id="cv_cr" inputmode="numeric" oninput="convertPreview(this.value)"><div id="cv_hit" class="def"></div>
+    <div id="cv_new" class="hide"><label class="f">Legal name (as on the CR)</label><input id="cv_legal" placeholder="optional"><label class="f">Branch CR</label><input id="cv_br" placeholder="e.g. 12345-1"></div>
+    <div class="row" style="margin-top:12px"><button class="btn gold grow" onclick="convertSave('${esc(id)}',this)">Convert</button><button class="btn sec" onclick="closeModal()">Cancel</button></div>`);
+}
+function convertPreview(cr) { cr = cr.trim(); const el = $('#cv_hit'); if (!/^\d{3,8}$/.test(cr)) { el.innerHTML = ''; $('#cv_new').classList.add('hide'); return; } const vs = S.db.vendors.filter(v => String(v['Root CR']) === cr); if (vs.length) { el.innerHTML = '✔ In the pipeline: <b>' + vs.map(v => esc(v['Brand (Trade Name)'])).join(', ') + '</b> · ' + esc(vs[0]['Assigned To'] || 'unassigned') + ' · ' + esc(vs[0].Status) + (vs[0]['Assigned To'] && vs[0]['Assigned To'] !== S.user.name ? ' — assignment stays with ' + esc(vs[0]['Assigned To']) : ''); $('#cv_new').classList.add('hide'); } else { el.innerHTML = 'Not in the pipeline — will be sent for approval as a new vendor.'; $('#cv_new').classList.remove('hide'); } }
+async function convertSave(id, btn) {
+  const cr = $('#cv_cr').value.trim(); if (!/^\d{3,8}$/.test(cr)) { toast('Root CR must be numbers only', true); return; } busy(btn, true);
+  try { const r = await api('convertLead', { id: id, root: cr, extra: { 'Legal Name (EN)': ($('#cv_legal') || {}).value || '', 'Branch CR': ($('#cv_br') || {}).value || '' } });
+    remember(db => { const l = db.lById[id]; if (!l) return; l['Root CR'] = cr; if (r.converted) { l.Status = 'Converted'; l['Converted To'] = r.vid; const acts = db.actOfLead[id] || []; acts.forEach(a => { a['Vendor ID'] = r.vid; a.vid = r.vid; (db.actOf[r.vid] = db.actOf[r.vid] || []).unshift(a); }); const v = db.byId[r.vid]; const c = l.cids.map(x => db.cById[x]).filter(Boolean)[0]; if (v && c) { if (!v['Decision Maker']) v['Decision Maker'] = c.Name; if (!v['Best Number']) v['Best Number'] = '+973 ' + c.Mobile; if (!v['Assigned To']) v['Assigned To'] = l.Rep; } } else { l.Status = 'CR identified'; l['Pending ID'] = r.pendingId; } });
+    closeModal(); toast(r.converted ? 'Merged into the vendor' + (r.moved ? ' · ' + r.moved + ' activity row(s) moved' : '') : 'Sent for approval — converts when approved');
+    if (r.converted) openVendor(r.vid); else render();
+  } catch (e) { toast(e.message, true); busy(btn, false); }
+}
+
 function modal(html) { closeModal(); const d = document.createElement('div'); d.className = 'modal'; d.id = 'modal'; d.innerHTML = '<div class="box">' + html + '</div>'; d.addEventListener('click', e => { if (e.target === d) closeModal(); }); document.body.appendChild(d); }
 function closeModal() { const d = $('#modal'); if (d) d.remove(); }
 render(); loadDB().then(() => { if (!S.token) loadReps(); }); if (!S.token) loadReps();
