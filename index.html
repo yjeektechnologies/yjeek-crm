@@ -149,7 +149,11 @@ function buildDB(raw) {
 function applyEdits(db) {   // re-apply our own recent changes on top of a (possibly older) snapshot
   const cutoff = Date.now() - 15 * 60 * 1000; S.edits = S.edits.filter(e => e.t > cutoff);
   S.edits.forEach(e => { try { e.fn(db); } catch (x) {} });
+  patches().forEach(p => { const vv = db.byId[p.vid]; if (vv) Object.keys(p.f).forEach(k => vv[k] = p.f[k]); });
 }
+// field patches survive a page reload (localStorage) until the snapshot catches up (15 min max)
+function patches() { try { const cutoff = Date.now() - 15 * 60 * 1000; return (JSON.parse(localStorage.getItem('yjeek_patches') || '[]')).filter(p => p.t > cutoff); } catch (e) { return []; } }
+function patch(vid, f) { try { const list = patches(); list.push({ t: Date.now(), vid: String(vid), f: f }); localStorage.setItem('yjeek_patches', JSON.stringify(list)); } catch (e) {} }
 function remember(fn) { S.edits.push({ t: Date.now(), fn: fn }); fn(S.db); }
 async function loadDB(force) {
   if (S.loading) return; S.loading = true;
@@ -354,7 +358,7 @@ async function saveActivity(btn) {
   render(); toast('Saved');
   api('logActivity', p).then(() => { a._local = false; if (S.view === 'vendor' && S.vtab === 'activity') activityTab(); }).catch(e => { toast('Not saved: ' + e.message, true); const list = S.db.actOf[v.vid]; const i = list.indexOf(a); if (i > -1) list.splice(i, 1); render(); });
 }
-async function claim() { const v = S.vendor; remember(db => { const vv = db.byId[v.vid]; if (vv) vv['Assigned To'] = S.user.name; }); render(); toast('Assigned to you'); api('saveVendor', { vid: v.vid, fields: { 'Assigned To': S.user.name } }).catch(e => toast(e.message, true)); }
+async function claim() { const v = S.vendor; remember(db => { const vv = db.byId[v.vid]; if (vv) vv['Assigned To'] = S.user.name; }); patch(v.vid, { 'Assigned To': S.user.name }); render(); toast('Assigned to you'); api('saveVendor', { vid: v.vid, fields: { 'Assigned To': S.user.name } }).catch(e => toast(e.message, true)); }
 function editVendor() {
   const v = S.vendor; const mgr = S.user.role === 'manager';
   modal(`<h3>Edit vendor</h3><label class="f">Decision maker</label><input id="e_dm" value="${esc(v['Decision Maker'])}"><label class="f">Best number</label><input id="e_ph" type="tel" value="${esc(v['Best Number'])}"><label class="f">Email</label><input id="e_em" type="email" value="${esc(v.Email)}">
@@ -365,7 +369,7 @@ function editVendor() {
 }
 async function saveVendor(btn) {
   const v = S.vendor; const f = { 'Decision Maker': $('#e_dm').value, 'Best Number': $('#e_ph').value, 'Email': $('#e_em').value, 'Main Area': $('#e_ar').value, 'Status': $('#e_st').value, 'Notes (short)': $('#e_nt').value }; if ($('#e_as')) f['Assigned To'] = $('#e_as').value;
-  remember(db => { const vv = db.byId[v.vid]; if (vv) Object.keys(f).forEach(k => vv[k] = f[k]); });
+  remember(db => { const vv = db.byId[v.vid]; if (vv) Object.keys(f).forEach(k => vv[k] = f[k]); }); patch(v.vid, f);
   closeModal(); render(); toast('Saved');
   api('saveVendor', { vid: v.vid, fields: f }).catch(e => toast('Not saved: ' + e.message, true));
 }
